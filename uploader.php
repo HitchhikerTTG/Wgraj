@@ -155,6 +155,191 @@ function ftp_ensure_dir($remoteDir) {
     return ['ok' => true, 'error' => null];
 }
 
+function upload_file($localPath, $remoteFullPath, $retryCount = 0) {
+    $method = UPLOAD_METHOD;
+    
+    switch ($method) {
+        case 'http':
+            return http_chunked_upload($localPath, $remoteFullPath, $retryCount);
+        case 'local':
+            return local_file_upload($localPath, $remoteFullPath, $retryCount);
+        case 'ftp':
+        default:
+            return ftp_put_file($localPath, $remoteFullPath, $retryCount);
+    }
+}
+
+function http_chunked_upload($localPath, $remoteFullPath, $retryCount = 0) {
+    debug_info('HTTP_UPLOAD_START', 'Starting HTTP chunked upload', [
+        'local_path' => $localPath,
+        'remote_path' => $remoteFullPath,
+        'file_size' => file_exists($localPath) ? filesize($localPath) : 'N/A',
+        'retry_attempt' => $retryCount,
+        'chunk_size' => CHUNK_SIZE
+    ]);
+    
+    $fileSize = filesize($localPath);
+    $localHash = hash_file('md5', $localPath);
+    $uploadId = uniqid('upload_', true);
+    
+    $fp = fopen($localPath, 'rb');
+    if (!$fp) {
+        debug_error('HTTP_UPLOAD_ERROR', 'Cannot open local file', ['path' => $localPath]);
+        return ['ok' => false, 'error' => 'Cannot open local file'];
+    }
+    
+    $chunkNumber = 0;
+    $totalChunks = ceil($fileSize / CHUNK_SIZE);
+    $uploadedBytes = 0;
+    
+    while (!feof($fp)) {
+        $chunkData = fread($fp, CHUNK_SIZE);
+        $chunkSize = strlen($chunkData);
+        $chunkHash = md5($chunkData);
+        
+        $postData = [
+            'upload_id' => $uploadId,
+            'chunk_number' => $chunkNumber,
+            'total_chunks' => $totalChunks,
+            'chunk_hash' => $chunkHash,
+            'file_hash' => $localHash,
+            'file_size' => $fileSize,
+            'remote_path' => $remoteFullPath,
+            'token' => HTTP_UPLOAD_TOKEN,
+            'chunk_data' => base64_encode($chunkData)
+        ];
+        
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL => HTTP_UPLOAD_URL,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => json_encode($postData),
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 60,
+            CURLOPT_CONNECTTIMEOUT => 30,
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'Authorization: Bearer ' . HTTP_UPLOAD_TOKEN
+            ]
+        ]);
+        
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        curl_close($ch);
+        
+        if ($response === false || $httpCode !== 200) {
+            fclose($fp);
+            debug_error('HTTP_CHUNK_FAILED', 'Chunk upload failed', [
+                'chunk' => $chunkNumber,
+                'http_code' => $httpCode,
+                'error' => $error,
+                'response' => $response
+            ]);
+            
+            // Retry logic
+            if ($retryCount < 3) {
+                sleep(pow(2, $retryCount)); // Exponential backoff
+                return http_chunked_upload($localPath, $remoteFullPath, $retryCount + 1);
+            }
+            
+            return ['ok' => false, 'error' => "HTTP upload failed: $error"];
+        }
+        
+        $result = json_decode($response, true);
+        if (!$result || !$result['ok']) {
+            fclose($fp);
+            debug_error('HTTP_CHUNK_REJECTED', 'Chunk rejected by server', [
+                'chunk' => $chunkNumber,
+                'response' => $response
+            ]);
+            return ['ok' => false, 'error' => 'Chunk rejected: ' . ($result['error'] ?? 'unknown')];
+        }
+        
+        $uploadedBytes += $chunkSize;
+        $chunkNumber++;
+        
+        debug_info('HTTP_CHUNK_SUCCESS', 'Chunk uploaded successfully', [
+            'chunk' => $chunkNumber - 1,
+            'progress' => round($uploadedBytes / $fileSize * 100, 2) . '%'
+        ]);
+    }
+    
+    fclose($fp);
+    
+    // Finalize upload
+    $finalizeData = [
+        'upload_id' => $uploadId,
+        'action' => 'finalize',
+        'token' => HTTP_UPLOAD_TOKEN
+    ];
+    
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => HTTP_UPLOAD_URL,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($finalizeData),
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_HTTPHEADER => [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . HTTP_UPLOAD_TOKEN
+        ]
+    ]);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    $result = json_decode($response, true);
+    
+    debug_info('HTTP_UPLOAD_COMPLETE', 'HTTP upload completed', [
+        'success' => $result['ok'] ?? false,
+        'integrity_verified' => $result['integrity_verified'] ?? false,
+        'remote_hash' => $result['remote_hash'] ?? null
+    ]);
+    
+    return $result ?: ['ok' => false, 'error' => 'Invalid server response'];
+}
+
+function local_file_upload($localPath, $remoteFullPath, $retryCount = 0) {
+    debug_info('LOCAL_UPLOAD_START', 'Starting local file upload', [
+        'local_path' => $localPath,
+        'remote_path' => $remoteFullPath
+    ]);
+    
+    $uploadDir = LOCAL_STORAGE_PATH;
+    if (!is_dir($uploadDir)) {
+        @mkdir($uploadDir, 0775, true);
+    }
+    
+    $destinationPath = $uploadDir . '/' . ltrim($remoteFullPath, '/');
+    $destinationDir = dirname($destinationPath);
+    
+    if (!is_dir($destinationDir)) {
+        @mkdir($destinationDir, 0775, true);
+    }
+    
+    $result = copy($localPath, $destinationPath);
+    
+    if ($result) {
+        // Verify integrity
+        $localHash = hash_file('md5', $localPath);
+        $remoteHash = hash_file('md5', $destinationPath);
+        $verified = ($localHash === $remoteHash);
+        
+        debug_info('LOCAL_UPLOAD_SUCCESS', 'Local upload completed', [
+            'destination' => $destinationPath,
+            'integrity_verified' => $verified
+        ]);
+        
+        return ['ok' => true, 'integrity_verified' => $verified];
+    } else {
+        debug_error('LOCAL_UPLOAD_FAILED', 'Local upload failed');
+        return ['ok' => false, 'error' => 'Failed to copy file'];
+    }
+}
+
 function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
     debug_info('UPLOAD_START', 'Starting file upload', [
         'local_path' => $localPath,
@@ -759,7 +944,7 @@ if ($action==='upload' && $_SERVER['REQUEST_METHOD']==='POST') {
     }
 
     $dst = rtrim($meta['remote_dir'],'/').'/'.$rel;
-    $up  = ftp_put_file($tmp,$dst);
+    $up  = upload_file($tmp,$dst);
 
     if ($up['ok']) {
         $meta['files'][] = ['name'=>$name,'rel'=>$rel,'remote'=>$dst,'size'=>$size,'ts'=>now()];
@@ -885,7 +1070,7 @@ if ($action==='retry' && $_SERVER['REQUEST_METHOD']==='POST') {
     $dst = rtrim($meta['remote_dir'],'/').'/'.$rel;
     
     // Force retry (reset retry count)
-    $up = ftp_put_file($tmp, $dst, 0);
+    $up = upload_file($tmp, $dst, 0);
 
     if ($up['ok']) {
         // Update or add file to metadata

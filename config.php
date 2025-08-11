@@ -69,13 +69,24 @@ try {
 define('ADMIN_KEY', $_ENV['ADMIN_KEY'] ?? 'changeme');
 define('BASE_URL', $_ENV['BASE_URL'] ?? 'http://localhost');
 
-// FTP Configuration
+// Upload method configuration
+define('UPLOAD_METHOD', $_ENV['UPLOAD_METHOD'] ?? 'ftp'); // 'ftp', 'http', 'local'
+
+// FTP Configuration (legacy)
 define('FTP_MODE', $_ENV['FTP_MODE'] ?? 'explicit');
 define('FTP_HOST', $_ENV['FTP_HOST'] ?? 'localhost');
 define('FTP_PORT', (int)($_ENV['FTP_PORT'] ?? 21));
 define('FTP_USER', $_ENV['FTP_USER'] ?? 'user');
 define('FTP_PASS', $_ENV['FTP_PASS'] ?? 'pass');
 define('FTP_ROOTDIR', $_ENV['FTP_ROOTDIR'] ?? '/uploads');
+
+// HTTP Upload Configuration (recommended)
+define('HTTP_UPLOAD_URL', $_ENV['HTTP_UPLOAD_URL'] ?? 'https://your-server.com/upload');
+define('HTTP_UPLOAD_TOKEN', $_ENV['HTTP_UPLOAD_TOKEN'] ?? '');
+define('CHUNK_SIZE', (int)($_ENV['CHUNK_SIZE'] ?? 1048576)); // 1MB chunks
+
+// Local storage (for testing)
+define('LOCAL_STORAGE_PATH', $_ENV['LOCAL_STORAGE_PATH'] ?? './uploads');
 
 // Upload limits
 define('MAX_BYTES', (int)($_ENV['MAX_BYTES'] ?? 500 * 1024 * 1024));
