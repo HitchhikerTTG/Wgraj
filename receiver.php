@@ -8,6 +8,8 @@ require_once 'config.php';
 
 // Debug logging
 error_log("RECEIVER: Request received - Method: " . $_SERVER['REQUEST_METHOD'] . ", URL: " . $_SERVER['REQUEST_URI']);
+error_log("RECEIVER: Headers: " . json_encode(apache_request_headers()));
+error_log("RECEIVER: Server vars: " . json_encode($_SERVER));
 
 // CORS headers
 header('Access-Control-Allow-Origin: *');
