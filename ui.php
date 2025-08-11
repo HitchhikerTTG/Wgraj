@@ -431,6 +431,24 @@ if ($token):
 
   <div class="card">
     <div class="card-header">
+      <h6 class="mb-0">Test wysyłania email</h6>
+    </div>
+    <div class="card-body">
+      <form id="emailtest" class="row g-2">
+        <div class="col-12 col-md-6">
+          <label class="form-label">Klucz admina</label>
+          <input type="password" id="ekey" class="form-control" required>
+        </div>
+        <div class="col-12 col-md-6 d-grid align-self-end">
+          <button class="btn btn-outline-info" type="submit">Testuj email</button>
+        </div>
+      </form>
+      <div id="emailtestout" class="mt-3"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
       <h6 class="mb-0">Test połączenia FTP</h6>
     </div>
     <div class="card-body">
@@ -484,6 +502,37 @@ if ($token):
         }
       } catch(e) {
         out.innerHTML = `<div class="alert alert-danger">Błąd połączenia: ${e.message}</div>`;
+      }
+    });
+
+    // Email test
+    const etform = document.getElementById('emailtest');
+    const etout  = document.getElementById('emailtestout');
+    
+    etform.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const fd = new FormData();
+      fd.append('key', document.getElementById('ekey').value.trim());
+      
+      etout.innerHTML = '<div class="alert alert-info">Testowanie wysyłania email...</div>';
+      
+      try {
+        const res = await fetch('?action=emailtest', {method:'POST', body:fd});
+        const js = await res.json();
+        
+        if (js.ok) {
+          etout.innerHTML = `
+            <div class="alert alert-success">
+              <strong>✓ ${js.message}</strong><br>
+              <small>Konfiguracja SMTP: ${js.config.smtp_configured ? 'TAK' : 'NIE'}<br>
+              Email do: ${js.config.email_to}<br>
+              Email od: ${js.config.email_from}</small>
+            </div>`;
+        } else {
+          etout.innerHTML = `<div class="alert alert-danger"><strong>✗ ${js.message || js.error}</strong></div>`;
+        }
+      } catch(e) {
+        etout.innerHTML = `<div class="alert alert-danger">Błąd połączenia: ${e.message}</div>`;
       }
     });
 
