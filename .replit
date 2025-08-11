@@ -1,14 +1,2 @@
 [nix]
 channel = "stable-25_05"
-
-[workflows]
-runButton = "PHP Server"
-
-[[workflows.workflow]]
-name = "PHP Server"
-author = 37291978
-mode = "sequential"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "php -S 0.0.0.0:5000"

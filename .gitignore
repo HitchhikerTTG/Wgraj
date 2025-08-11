@@ -1,6 +1,5 @@
 # Environment variables
 .env
-.htaccess
 
 # Data directory with sensitive files
 data/
