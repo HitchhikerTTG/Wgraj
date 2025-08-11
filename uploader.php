@@ -156,17 +156,7 @@ function ftp_ensure_dir($remoteDir) {
 }
 
 function upload_file($localPath, $remoteFullPath, $retryCount = 0) {
-    $method = UPLOAD_METHOD;
-    
-    switch ($method) {
-        case 'http':
-            return http_chunked_upload($localPath, $remoteFullPath, $retryCount);
-        case 'local':
-            return local_file_upload($localPath, $remoteFullPath, $retryCount);
-        case 'ftp':
-        default:
-            return ftp_put_file($localPath, $remoteFullPath, $retryCount);
-    }
+    return local_file_upload($localPath, $remoteFullPath, $retryCount);
 }
 
 function http_chunked_upload($localPath, $remoteFullPath, $retryCount = 0) {
@@ -305,38 +295,105 @@ function http_chunked_upload($localPath, $remoteFullPath, $retryCount = 0) {
 function local_file_upload($localPath, $remoteFullPath, $retryCount = 0) {
     debug_info('LOCAL_UPLOAD_START', 'Starting local file upload', [
         'local_path' => $localPath,
-        'remote_path' => $remoteFullPath
+        'remote_path' => $remoteFullPath,
+        'file_size' => file_exists($localPath) ? filesize($localPath) : 0,
+        'retry_attempt' => $retryCount
     ]);
     
     $uploadDir = LOCAL_STORAGE_PATH;
     if (!is_dir($uploadDir)) {
-        @mkdir($uploadDir, 0775, true);
+        if (!@mkdir($uploadDir, 0775, true)) {
+            debug_error('LOCAL_UPLOAD_FAILED', 'Cannot create upload directory', [
+                'directory' => $uploadDir,
+                'permissions' => decoct(fileperms(dirname($uploadDir)))
+            ]);
+            return ['ok' => false, 'error' => 'Cannot create upload directory: ' . $uploadDir];
+        }
     }
     
     $destinationPath = $uploadDir . '/' . ltrim($remoteFullPath, '/');
     $destinationDir = dirname($destinationPath);
     
     if (!is_dir($destinationDir)) {
-        @mkdir($destinationDir, 0775, true);
+        if (!@mkdir($destinationDir, 0775, true)) {
+            debug_error('LOCAL_UPLOAD_FAILED', 'Cannot create destination directory', [
+                'directory' => $destinationDir
+            ]);
+            return ['ok' => false, 'error' => 'Cannot create directory: ' . $destinationDir];
+        }
     }
     
+    // Check if source file exists and is readable
+    if (!file_exists($localPath)) {
+        debug_error('LOCAL_UPLOAD_FAILED', 'Source file not found', ['path' => $localPath]);
+        return ['ok' => false, 'error' => 'Source file not found'];
+    }
+    
+    if (!is_readable($localPath)) {
+        debug_error('LOCAL_UPLOAD_FAILED', 'Source file not readable', ['path' => $localPath]);
+        return ['ok' => false, 'error' => 'Source file not readable'];
+    }
+    
+    // Check destination directory permissions
+    if (!is_writable($destinationDir)) {
+        debug_error('LOCAL_UPLOAD_FAILED', 'Destination directory not writable', [
+            'directory' => $destinationDir,
+            'permissions' => decoct(fileperms($destinationDir))
+        ]);
+        return ['ok' => false, 'error' => 'Destination directory not writable: ' . $destinationDir];
+    }
+    
+    $start_time = microtime(true);
     $result = copy($localPath, $destinationPath);
+    $duration = microtime(true) - $start_time;
     
     if ($result) {
-        // Verify integrity
-        $localHash = hash_file('md5', $localPath);
-        $remoteHash = hash_file('md5', $destinationPath);
-        $verified = ($localHash === $remoteHash);
+        $localSize = filesize($localPath);
+        $remoteSize = filesize($destinationPath);
+        $sizeMatch = ($localSize === $remoteSize);
         
         debug_info('LOCAL_UPLOAD_SUCCESS', 'Local upload completed', [
             'destination' => $destinationPath,
-            'integrity_verified' => $verified
+            'duration' => round($duration, 3),
+            'local_size' => $localSize,
+            'remote_size' => $remoteSize,
+            'size_match' => $sizeMatch,
+            'public_url' => str_replace(dirname(__DIR__), '', $destinationPath)
         ]);
         
-        return ['ok' => true, 'integrity_verified' => $verified];
+        $response = ['ok' => true, 'duration' => $duration];
+        
+        // Add debug info if requested
+        if (isset($GLOBALS['_REQ_DEBUG']) && $GLOBALS['_REQ_DEBUG']) {
+            $response['debug'] = [
+                'destination' => $destinationPath,
+                'local_size' => $localSize,
+                'remote_size' => $remoteSize,
+                'size_match' => $sizeMatch,
+                'duration' => $duration,
+                'public_url' => str_replace(__DIR__, '', $destinationPath),
+                'permissions' => [
+                    'upload_dir' => decoct(fileperms($uploadDir)),
+                    'dest_dir' => decoct(fileperms($destinationDir)),
+                    'dest_file' => file_exists($destinationPath) ? decoct(fileperms($destinationPath)) : 'file not created'
+                ]
+            ];
+        }
+        
+        return $response;
     } else {
-        debug_error('LOCAL_UPLOAD_FAILED', 'Local upload failed');
-        return ['ok' => false, 'error' => 'Failed to copy file'];
+        $error = error_get_last();
+        debug_error('LOCAL_UPLOAD_FAILED', 'Copy operation failed', [
+            'source' => $localPath,
+            'destination' => $destinationPath,
+            'php_error' => $error,
+            'source_exists' => file_exists($localPath),
+            'source_readable' => is_readable($localPath),
+            'dest_dir_writable' => is_writable($destinationDir),
+            'free_space' => disk_free_space($destinationDir)
+        ]);
+        
+        return ['ok' => false, 'error' => 'Failed to copy file - check permissions and disk space'];
     }
 }
 

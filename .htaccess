@@ -1,10 +1,6 @@
 
 RewriteEngine On
 
-# Wyłącz przepisywanie dla receiver.php (wszystkie metody HTTP)
-RewriteCond %{REQUEST_URI} ^/receiver\.php$
-RewriteRule ^ - [L]
-
 # Obsłuż pliki/foldery istniejące normalnie
 RewriteCond %{REQUEST_FILENAME} -f [OR]
 RewriteCond %{REQUEST_FILENAME} -d
