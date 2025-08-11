@@ -191,6 +191,83 @@ if ($token):
         }
       }
 
+      async function retryUpload(item) {
+        // Reset progress bar
+        item.pbar.classList.remove('bg-danger', 'bg-warning');
+        item.pbar.classList.add('bg-info');
+        item.pbar.style.width = '0%';
+        item.pbar.textContent = 'Ponawiam...';
+        
+        // Remove retry button if exists
+        const retryBtn = item.row.querySelector('.btn-outline-warning');
+        if (retryBtn) retryBtn.remove();
+        
+        return new Promise((resolve) => {
+          const fd = new FormData();
+          fd.append('file', item.file, item.file.name);
+          fd.append('relpath', item.rel);
+          
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', '?action=retry<?php echo $token ? '&t='.rawurlencode($token).'&debug=1' : '';?>');
+          
+          xhr.upload.onprogress = (e) => {
+            if(e.lengthComputable){
+              item.pbar.style.width = Math.round(e.loaded/e.total*100)+'%';
+            }
+          };
+          
+          xhr.onreadystatechange = () => {
+            if (xhr.readyState === 4) {
+              try {
+                const res = JSON.parse(xhr.responseText);
+                
+                if (res.debug) {
+                  debugInfo.push({
+                    file: item.rel,
+                    success: res.ok,
+                    debug: res.debug,
+                    response: res,
+                    retry: true
+                  });
+                }
+                
+                if (!res.ok) {
+                  item.pbar.classList.remove('bg-info');
+                  item.pbar.classList.add('bg-danger');
+                  item.pbar.style.width = '100%';
+                  item.pbar.textContent = res.msg || 'Błąd ponownego przesłania';
+                } else {
+                  item.pbar.classList.remove('bg-info');
+                  item.pbar.classList.add('bg-success');
+                  item.pbar.style.width = '100%';
+                  
+                  if (res.debug && res.debug.integrity_check) {
+                    const integrityOk = res.debug.integrity_check.verified;
+                    if (integrityOk) {
+                      item.pbar.textContent = 'OK ✓ (ponowione)';
+                    } else {
+                      item.pbar.classList.remove('bg-success');
+                      item.pbar.classList.add('bg-warning');
+                      item.pbar.textContent = 'OK (błąd integralności)';
+                    }
+                  } else {
+                    item.pbar.textContent = 'OK (ponowione)';
+                  }
+                }
+              } catch(e) {
+                item.pbar.classList.remove('bg-info');
+                item.pbar.classList.add('bg-danger');
+                item.pbar.style.width = '100%';
+                item.pbar.textContent = 'Błąd parsowania odpowiedzi';
+              }
+              resolve();
+            }
+          };
+          
+          xhr.send(fd);
+        });
+      }
+
       async function uploadOne(item){
         return new Promise((resolve)=>{
           const fd = new FormData();
@@ -224,10 +301,31 @@ if ($token):
                   item.pbar.classList.add('bg-danger');
                   item.pbar.style.width = '100%';
                   item.pbar.textContent = res.msg || 'Błąd';
+                  
+                  // Add retry button
+                  const retryBtn = document.createElement('button');
+                  retryBtn.className = 'btn btn-sm btn-outline-warning mt-2';
+                  retryBtn.textContent = 'Ponów przesłanie';
+                  retryBtn.onclick = () => retryUpload(item);
+                  item.row.appendChild(retryBtn);
+                  
                 } else {
                   item.pbar.classList.add('bg-success');
                   item.pbar.style.width = '100%';
-                  item.pbar.textContent = 'OK';
+                  
+                  // Check integrity if debug info is available
+                  if (res.debug && res.debug.integrity_check) {
+                    const integrityOk = res.debug.integrity_check.verified;
+                    if (integrityOk) {
+                      item.pbar.textContent = 'OK ✓';
+                    } else {
+                      item.pbar.classList.remove('bg-success');
+                      item.pbar.classList.add('bg-warning');
+                      item.pbar.textContent = 'OK (błąd integralności)';
+                    }
+                  } else {
+                    item.pbar.textContent = 'OK';
+                  }
                 }
               } catch(e){
                 item.pbar.classList.add('bg-danger');

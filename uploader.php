@@ -163,6 +163,13 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
         'retry_attempt' => $retryCount
     ]);
     
+    // Calculate local file hash for verification
+    $localHash = hash_file('md5', $localPath);
+    debug_info('UPLOAD_HASH', 'Calculated local file hash', [
+        'file' => $localPath,
+        'hash' => $localHash
+    ]);
+    
     // Ensure directory exists
     $remoteDir = dirname($remoteFullPath);
     if ($remoteDir !== '.' && $remoteDir !== '/') {
@@ -307,6 +314,49 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
         ]);
     }
 
+    // Verify file integrity if upload was successful
+    $integrityCheck = ['verified' => false, 'local_hash' => $localHash, 'remote_hash' => null];
+    if ($resp['ok'] && $uploadSuccess) {
+        debug_info('INTEGRITY_CHECK', 'Starting file verification', ['remote_path' => $remoteFullPath]);
+        
+        $downloadResult = ftp_get_string($remoteFullPath);
+        if ($downloadResult['ok']) {
+            $remoteHash = hash('md5', $downloadResult['data']);
+            $integrityCheck['remote_hash'] = $remoteHash;
+            $integrityCheck['verified'] = ($localHash === $remoteHash);
+            
+            debug_info('INTEGRITY_RESULT', 'File verification completed', [
+                'local_hash' => $localHash,
+                'remote_hash' => $remoteHash,
+                'verified' => $integrityCheck['verified']
+            ]);
+            
+            if (!$integrityCheck['verified']) {
+                debug_error('INTEGRITY_FAILED', 'File integrity check failed', [
+                    'local_hash' => $localHash,
+                    'remote_hash' => $remoteHash,
+                    'local_size' => $expectedSize,
+                    'remote_size' => strlen($downloadResult['data'])
+                ]);
+                
+                // If integrity failed and we haven't exhausted retries, try again
+                if ($retryCount < 3) {
+                    debug_info('INTEGRITY_RETRY', 'Retrying upload due to integrity failure', [
+                        'retry_count' => $retryCount + 1
+                    ]);
+                    return ftp_put_file($localPath, $remoteFullPath, $retryCount + 1);
+                } else {
+                    $resp = ['ok' => false, 'error' => 'Integralność pliku nie została zachowana po 3 próbach'];
+                }
+            }
+        } else {
+            debug_error('INTEGRITY_DOWNLOAD_FAILED', 'Cannot download file for verification', [
+                'error' => $downloadResult['error']
+            ]);
+            $integrityCheck['download_error'] = $downloadResult['error'];
+        }
+    }
+
     // Include debug info in response if requested
     if (isset($GLOBALS['_REQ_DEBUG']) && $GLOBALS['_REQ_DEBUG']) {
         $resp['debug'] = [
@@ -318,6 +368,7 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
             'bytes_uploaded' => $bytesUploaded,
             'expected_size' => $expectedSize,
             'retry_attempt' => $retryCount,
+            'integrity_check' => $integrityCheck,
             'timeouts' => [
                 'connect' => $connectTimeout,
                 'total' => $totalTimeout
@@ -656,7 +707,112 @@ if ($action==='finalize' && $_SERVER['REQUEST_METHOD']==='POST') {
     json_response(['ok'=>true,'count'=>count($files)]);
 }
 
-/** 4) Autotest */
+/** 4) Manual retry upload */
+if ($action==='retry' && $_SERVER['REQUEST_METHOD']==='POST') {
+    if (!$token) {
+        debug_error('RETRY', 'No token provided');
+        json_response(['ok'=>false,'error'=>'Brak etykiety w URL'],400);
+    }
+    
+    $path = tok_path($token);
+    if (!is_file($path)) {
+        debug_error('RETRY', 'Token file not found', ['token' => $token]);
+        json_response(['ok'=>false,'error'=>'Taki link nie istnieje'],404);
+    }
+    
+    $meta = json_decode(file_get_contents($path), true);
+    if (!$meta) {
+        debug_error('RETRY', 'Invalid metadata', ['token' => $token]);
+        json_response(['ok'=>false,'error'=>'Błąd metadanych'],500);
+    }
+
+    if (!isset($_FILES['file'])) {
+        debug_error('RETRY', 'No file in request');
+        json_response(['ok'=>false,'error'=>'Brak pliku'],400);
+    }
+
+    $name = $_FILES['file']['name'];
+    $tmp  = $_FILES['file']['tmp_name'];
+    $err  = $_FILES['file']['error'];
+    $size = $_FILES['file']['size'];
+
+    debug_info('RETRY', 'Manual retry upload', [
+        'name' => $name,
+        'size' => $size,
+        'token' => $token
+    ]);
+
+    if ($err !== UPLOAD_ERR_OK) {
+        debug_error('RETRY', 'PHP upload error', ['error_code' => $err]);
+        json_response(['ok'=>false,'msg'=>"Błąd uploadu (kod $err)"],200);
+    }
+    
+    if ($size > MAX_BYTES) {
+        debug_error('RETRY', 'File too large', ['size' => $size, 'limit' => MAX_BYTES]);
+        json_response(['ok'=>false,'msg'=>"Przekroczono limit rozmiaru"],200);
+    }
+
+    $rel = $_POST['relpath'] ?? $name;
+    $rel = sanitize_rel($rel);
+    
+    if (!ext_ok($rel, ALLOW_EXT)) {
+        debug_error('RETRY', 'Invalid extension', ['file' => $rel, 'allowed' => ALLOW_EXT]);
+        json_response(['ok'=>false,'msg'=>"Niedozwolone rozszerzenie"],200);
+    }
+
+    $dst = rtrim($meta['remote_dir'],'/').'/'.$rel;
+    
+    // Force retry (reset retry count)
+    $up = ftp_put_file($tmp, $dst, 0);
+
+    if ($up['ok']) {
+        // Update or add file to metadata
+        $fileUpdated = false;
+        foreach ($meta['files'] as &$file) {
+            if ($file['rel'] === $rel) {
+                $file['size'] = $size;
+                $file['ts'] = now();
+                $file['retried'] = true;
+                $fileUpdated = true;
+                break;
+            }
+        }
+        
+        if (!$fileUpdated) {
+            $meta['files'][] = ['name'=>$name,'rel'=>$rel,'remote'=>$dst,'size'=>$size,'ts'=>now(),'retried'=>true];
+        }
+        
+        file_put_contents($path, json_encode($meta, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
+        
+        debug_info('RETRY_SUCCESS', 'Manual retry successful', [
+            'file' => $name,
+            'destination' => $dst,
+            'size' => $size
+        ]);
+        
+        $response = ['ok'=>true,'msg'=>'Plik ponownie przesłany pomyślnie'];
+        if (isset($up['debug'])) {
+            $response['debug'] = $up['debug'];
+            if ($_REQ_DEBUG) {
+                $ftpUrl = build_url($dst);
+                $httpsUrl = build_https_url($dst);
+                $response['debug']['file_url_ftp'] = $ftpUrl;
+                $response['debug']['file_url_https'] = $httpsUrl;
+                $response['debug']['file_path'] = $dst;
+            }
+        }
+        json_response($response);
+    } else {
+        debug_error('RETRY_FAILED', 'Manual retry failed', ['error' => $up['error']]);
+        $response = ['ok'=>false,'msg'=>'Błąd ponownego przesłania: '.$up['error']];
+        if (isset($up['debug'])) {
+            $response['debug'] = $up['debug'];
+        }
+        json_response($response, 200);
+    }
+}
+
+/** 5) Autotest */
 if ($action==='autotest' && $_SERVER['REQUEST_METHOD']==='POST') {
     $key = $_POST['key'] ?? '';
     $lab = $_POST['label'] ?? '';
