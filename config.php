@@ -52,6 +52,15 @@ define('TOKEN_TTL_H', (int)($_ENV['TOKEN_TTL_HOURS'] ?? 72));
 define('EMAIL_TO', $_ENV['EMAIL_TO'] ?? 'admin@example.com');
 define('EMAIL_FROM', $_ENV['EMAIL_FROM'] ?? 'uploader@example.com');
 
+// SMTP configuration (optional)
+if (!empty($_ENV['SMTP_HOST'])) {
+    define('SMTP_HOST', $_ENV['SMTP_HOST']);
+    define('SMTP_PORT', (int)($_ENV['SMTP_PORT'] ?? 587));
+    define('SMTP_USER', $_ENV['SMTP_USER'] ?? '');
+    define('SMTP_PASS', $_ENV['SMTP_PASS'] ?? '');
+    define('SMTP_SECURE', $_ENV['SMTP_SECURE'] ?? 'tls');
+}
+
 // Debug configuration
 define('DEBUG_UPLOAD', filter_var($_ENV['DEBUG_UPLOAD'] ?? 'false', FILTER_VALIDATE_BOOLEAN));
 define('DEBUG_LOG_FILE', $_ENV['DEBUG_LOG_FILE'] ?? __DIR__ . '/data/upload.log');

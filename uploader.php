@@ -480,9 +480,92 @@ function ftp_upload_string($content, $remoteFullPath) {
 
 /***** RESPONSE HELPERS *****/
 function send_mail($to,$from,$subject,$body){
-    debug_info('EMAIL', 'Sending notification', ['to' => $to, 'subject' => $subject]);
+    debug_info('EMAIL', 'Sending notification', ['to' => $to, 'subject' => $subject, 'method' => defined('SMTP_HOST') ? 'SMTP' : 'PHP mail()']);
+    
+    // Try SMTP if configured
+    if (defined('SMTP_HOST') && defined('SMTP_USER') && defined('SMTP_PASS')) {
+        $result = send_mail_smtp($to, $from, $subject, $body);
+        if ($result['success']) {
+            debug_info('EMAIL_SUCCESS', 'SMTP email sent successfully');
+            return true;
+        } else {
+            debug_error('EMAIL_SMTP_FAILED', 'SMTP failed, falling back to mail()', ['error' => $result['error']]);
+        }
+    }
+    
+    // Fallback to PHP mail()
     $headers = "From: $from\r\nReply-To: $from\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n";
-    @mail($to,'=?UTF-8?B?'.base64_encode($subject).'?=',$body,$headers);
+    $result = @mail($to,'=?UTF-8?B?'.base64_encode($subject).'?=',$body,$headers);
+    
+    if ($result) {
+        debug_info('EMAIL_SUCCESS', 'PHP mail() sent successfully');
+    } else {
+        debug_error('EMAIL_FAILED', 'Both SMTP and mail() failed');
+    }
+    
+    return $result;
+}
+
+function send_mail_smtp($to, $from, $subject, $body) {
+    $host = SMTP_HOST;
+    $port = defined('SMTP_PORT') ? SMTP_PORT : 587;
+    $user = SMTP_USER;
+    $pass = SMTP_PASS;
+    $secure = defined('SMTP_SECURE') ? SMTP_SECURE : 'tls';
+    
+    debug_info('SMTP_ATTEMPT', 'Attempting SMTP connection', [
+        'host' => $host,
+        'port' => $port,
+        'user' => $user,
+        'secure' => $secure
+    ]);
+    
+    $socket = @fsockopen($host, $port, $errno, $errstr, 30);
+    if (!$socket) {
+        return ['success' => false, 'error' => "Connection failed: $errstr ($errno)"];
+    }
+    
+    // Simple SMTP implementation
+    $commands = [
+        "EHLO " . ($_SERVER['SERVER_NAME'] ?? 'localhost'),
+        "AUTH LOGIN",
+        base64_encode($user),
+        base64_encode($pass),
+        "MAIL FROM: <$from>",
+        "RCPT TO: <$to>",
+        "DATA"
+    ];
+    
+    foreach ($commands as $cmd) {
+        fwrite($socket, "$cmd\r\n");
+        $response = fgets($socket);
+        debug_info('SMTP_COMMAND', 'SMTP command sent', ['command' => $cmd, 'response' => trim($response)]);
+        
+        if (!$response || (substr($response, 0, 1) != '2' && substr($response, 0, 1) != '3')) {
+            fclose($socket);
+            return ['success' => false, 'error' => "SMTP Error: $response"];
+        }
+    }
+    
+    // Send email content
+    $email_content = "Subject: $subject\r\n";
+    $email_content .= "From: $from\r\n";
+    $email_content .= "To: $to\r\n";
+    $email_content .= "MIME-Version: 1.0\r\n";
+    $email_content .= "Content-Type: text/plain; charset=UTF-8\r\n\r\n";
+    $email_content .= $body . "\r\n.\r\n";
+    
+    fwrite($socket, $email_content);
+    $response = fgets($socket);
+    
+    fwrite($socket, "QUIT\r\n");
+    fclose($socket);
+    
+    if (substr($response, 0, 1) == '2') {
+        return ['success' => true];
+    } else {
+        return ['success' => false, 'error' => "Send failed: $response"];
+    }
 }
 
 function json_response($arr,$code=200){
@@ -812,7 +895,40 @@ if ($action==='retry' && $_SERVER['REQUEST_METHOD']==='POST') {
     }
 }
 
-/** 5) Autotest */
+/** 5) Email test */
+if ($action==='emailtest' && $_SERVER['REQUEST_METHOD']==='POST') {
+    $key = $_POST['key'] ?? '';
+    
+    if ($key !== ADMIN_KEY) {
+        debug_error('EMAIL_TEST', 'Unauthorized access attempt');
+        json_response(['ok'=>false,'error'=>'unauthorized'],401);
+    }
+    
+    debug_info('EMAIL_TEST', 'Starting email test');
+    
+    $testSubject = 'Test email z uploadera - ' . date('Y-m-d H:i:s');
+    $testBody = "To jest testowy email z uploadera.\n\n";
+    $testBody .= "Czas wysłania: " . date('c') . "\n";
+    $testBody .= "Konfiguracja:\n";
+    $testBody .= "- Email do: " . EMAIL_TO . "\n";
+    $testBody .= "- Email od: " . EMAIL_FROM . "\n";
+    $testBody .= "- SMTP: " . (defined('SMTP_HOST') ? SMTP_HOST : 'nie skonfigurowane') . "\n";
+    
+    $result = send_mail(EMAIL_TO, EMAIL_FROM, $testSubject, $testBody);
+    
+    json_response([
+        'ok' => (bool)$result,
+        'message' => $result ? 'Email testowy wysłany' : 'Błąd wysyłania emaila',
+        'config' => [
+            'smtp_configured' => defined('SMTP_HOST'),
+            'smtp_host' => defined('SMTP_HOST') ? SMTP_HOST : null,
+            'email_to' => EMAIL_TO,
+            'email_from' => EMAIL_FROM
+        ]
+    ]);
+}
+
+/** 6) Autotest */
 if ($action==='autotest' && $_SERVER['REQUEST_METHOD']==='POST') {
     $key = $_POST['key'] ?? '';
     $lab = $_POST['label'] ?? '';
