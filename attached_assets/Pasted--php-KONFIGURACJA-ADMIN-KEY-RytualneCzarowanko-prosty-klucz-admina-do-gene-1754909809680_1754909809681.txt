@@ -1,0 +1,671 @@
+<?php
+/***** KONFIGURACJA *****/
+$ADMIN_KEY   = 'RytualneCzarowanko'; // prosty klucz admina do generowania linków np. "tajne-xyz"
+$BASE_URL    = 'https://wgraj.nirski.com'; // adres pod którym stoi ten skrypt (bez końcowego /)
+
+/* TRYB FTP/FTPS — jeśli masz błąd TLS:
+   - spróbuj 'implicit' + port 990
+   - awaryjnie 'plain' + 21 (bez TLS), tylko na test, wróć do TLS
+*/
+$FTP_MODE   = 'implicit'; // 'explicit' (AUTH TLS:21) | 'implicit' (FTPS:990) | 'plain' (FTP:21)
+$FTP_HOST    = 'host';
+$FTP_PORT    = 990;
+$FTP_USER    = 'user';
+$FTP_PASS    = 'pass';
+$FTP_ROOTDIR = '/uploads';        // zdalny katalog bazowy, musi istnieć lub dać się utworzyć
+
+$MAX_BYTES   = 500 * 1024 * 1024; // max rozmiar JEDNEGO pliku (tu 500 MB)
+$ALLOW_EXT   = ['pdf','jpg','jpeg','png','zip','txt','mp3','mp4','mov','xlsx','docx'];
+$TOKEN_TTL_H = 72;                // token ważny 72h
+$EMAIL_TO    = 'wit@nirski.com';    // gdzie wysłać powiadomienie
+$EMAIL_FROM  = 'uploader@nirski.com'; // nadawca (często dowolny w ramach domeny)
+
+/* Debug uploadów */
+$DEBUG_UPLOAD       = true;                             // włącz/wyłącz globalnie
+$DEBUG_LOG_FILE     = __DIR__ . '/data/upload.log';     // gdzie zapisywać pełny log
+$DEBUG_VERBOSE_LIMIT= 2000;                             // ile znaków verbose wysłać w JSON (bezpiecznie)
+
+/***** DANE LOKALNE *****/
+$DATA_DIR = __DIR__ . '/data';
+if (!is_dir($DATA_DIR)) { @mkdir($DATA_DIR, 0775, true); }
+
+/***** NARZĘDZIA *****/
+function now() { return time(); }
+function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES,'UTF-8'); }
+function slugify($s){
+    $s = trim($s);
+    if ($s==='') return '';
+    $s = iconv('UTF-8','ASCII//TRANSLIT//IGNORE',$s);
+    $s = preg_replace('~[^A-Za-z0-9]+~','-',$s);
+    $s = trim($s,'-');
+    $s = strtolower($s);
+    return substr($s,0,64);
+}
+function sanitize_rel($rel){
+    $rel = str_replace('\\','/',$rel);
+    $rel = preg_replace('~/+~','/',$rel);
+    $parts=[];
+    foreach(explode('/',$rel) as $p){
+        if($p===''||$p==='.'||$p==='..') continue;
+        $parts[] = preg_replace('/[^\w\.\-]+/u','_', $p);
+    }
+    return implode('/',$parts);
+}
+function ext_ok($name, $allow){
+    $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+    return $ext==='' || in_array($ext, $allow, true); // puste = katalog/bez rozszerzenia
+}
+function tok_path($token){ global $DATA_DIR; return $DATA_DIR.'/tok_'.$token.'.json'; }
+
+/***** cURL: tryby FTP/FTPS *****/
+function curl_opts_for_mode(&$ch) {
+    global $FTP_MODE;
+    if ($FTP_MODE === 'explicit') {
+        curl_setopt($ch, CURLOPT_USE_SSL, CURLUSESSL_ALL);
+        curl_setopt($ch, CURLOPT_FTPSSLAUTH, CURLFTPAUTH_TLS);
+        // czasem pomaga przy niektórych serwerach:
+        // curl_setopt($ch, CURLOPT_FTP_SSL_CCC, true);
+    } elseif ($FTP_MODE === 'implicit') {
+        // użyjemy ftps:// w URL — to wystarczy
+    } else {
+        // plain FTP — brak TLS
+    }
+    // „rozluźnienia” na shared hostingu
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+}
+function build_url($remoteFullPath) {
+    global $FTP_MODE, $FTP_HOST, $FTP_PORT;
+    $scheme = ($FTP_MODE === 'implicit') ? 'ftps' : 'ftp';
+    $path   = $remoteFullPath[0] === '/' ? $remoteFullPath : "/$remoteFullPath";
+    return sprintf('%s://%s:%d%s', $scheme, $FTP_HOST, $FTP_PORT, $path);
+}
+
+/***** Operacje FTP *****/
+function ftp_put_file($localPath, $remoteFullPath) {
+  global $FTP_USER, $FTP_PASS, $DEBUG_UPLOAD, $DEBUG_VERBOSE_LIMIT;
+  $fp = fopen($localPath,'rb'); if(!$fp) return ['ok'=>false,'error'=>'Nie mogę otworzyć pliku'];
+
+  // zbiórka verbose do pamięci
+  $vstream = fopen('php://temp', 'w+');
+
+  $ch = curl_init();
+  curl_setopt_array($ch, [
+      CURLOPT_URL => build_url($remoteFullPath),
+      CURLOPT_USERPWD => $FTP_USER.':'.$FTP_PASS,
+      CURLOPT_UPLOAD => true,
+      CURLOPT_INFILE => $fp,
+      CURLOPT_INFILESIZE => filesize($localPath),
+      CURLOPT_FTP_CREATE_MISSING_DIRS => CURLFTP_CREATE_DIR,
+      CURLOPT_CONNECTTIMEOUT => 60,
+      CURLOPT_TIMEOUT => 1200,
+      CURLOPT_NOPROGRESS => false,
+      CURLOPT_VERBOSE => true,                 // <— włącz verbose
+      CURLOPT_STDERR  => $vstream,             // <— gdzie zapisywać verbose
+  ]);
+  curl_opts_for_mode($ch);
+
+  $ok   = curl_exec($ch);
+  $err  = $ok ? null : curl_error($ch);
+  $code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+  $info = curl_getinfo($ch);
+
+  // pobierz verbose
+  rewind($vstream);
+  $verbose = stream_get_contents($vstream);
+  fclose($vstream);
+
+  curl_close($ch); fclose($fp);
+
+  // log do pliku (pełny)
+  debug_log('UPLOAD', [
+      'target'   => $remoteFullPath,
+      'ok'       => (bool)$ok,
+      'error'    => $err,
+      'httpcode' => $code,
+      'info'     => $info,
+      'verbose'  => $verbose,
+  ]);
+
+  // wynik do API (bezpieczny skrót verbose)
+  $resp = [];
+  if(!$ok)        $resp = ['ok'=>false,'error'=>"cURL: $err"];
+  elseif($code>=400) $resp = ['ok'=>false,'error'=>"FTP code: $code"];
+  else            $resp = ['ok'=>true];
+
+  // dorzuć skrócony debug; ale tylko gdy żądanie przyszło z „debug=1” lub „debug_key=ADMIN_KEY”
+  if (isset($GLOBALS['_REQ_DEBUG']) && $GLOBALS['_REQ_DEBUG']) {
+      $resp['debug'] = [
+          'info'    => $info,
+          'verbose' => mb_substr($verbose, -$DEBUG_VERBOSE_LIMIT),
+      ];
+  }
+
+  return $resp;
+}
+function ftp_get_string($remoteFullPath) {
+    global $FTP_USER, $FTP_PASS;
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => build_url($remoteFullPath),
+        CURLOPT_USERPWD => $FTP_USER.':'.$FTP_PASS,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 30,
+        CURLOPT_TIMEOUT => 60,
+    ]);
+    curl_opts_for_mode($ch);
+    $out = curl_exec($ch);
+    $err = $out===false ? curl_error($ch) : null;
+    $code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    curl_close($ch);
+    if ($out===false) return ['ok'=>false,'error'=>"GET error: $err"];
+    if ($code && $code>=400) return ['ok'=>false,'error'=>"GET code: $code"];
+    return ['ok'=>true,'data'=>$out];
+}
+function ftp_list_dir($remoteDir) {
+    global $FTP_USER, $FTP_PASS;
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => build_url($remoteDir),
+        CURLOPT_USERPWD => $FTP_USER.':'.$FTP_PASS,
+        CURLOPT_DIRLISTONLY => true,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 30,
+        CURLOPT_TIMEOUT => 60,
+    ]);
+    curl_opts_for_mode($ch);
+    $out = curl_exec($ch);
+    $err = $out===false ? curl_error($ch) : null;
+    curl_close($ch);
+    if ($out===false) return ['error'=>"LIST error: $err"];
+    $lines = array_filter(array_map('trim', explode("\n",$out)));
+    return $lines;
+}
+function ftp_delete_file($remoteFullPath){
+    global $FTP_USER,$FTP_PASS;
+    $ch = curl_init();
+    curl_setopt_array($ch,[
+        CURLOPT_URL => build_url('/'),
+        CURLOPT_USERPWD => $FTP_USER.':'.$FTP_PASS,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 20,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_QUOTE => ["DELE ".$remoteFullPath],
+    ]);
+    curl_opts_for_mode($ch);
+    $ok = curl_exec($ch);
+    $err = $ok===false ? curl_error($ch) : null;
+    curl_close($ch);
+    return $ok===false ? ['ok'=>false,'error'=>"DELE error: $err"] : ['ok'=>true];
+}
+function ftp_remove_dir($remoteDir){
+    global $FTP_USER,$FTP_PASS;
+    $ch = curl_init();
+    curl_setopt_array($ch,[
+        CURLOPT_URL => build_url('/'),
+        CURLOPT_USERPWD => $FTP_USER.':'.$FTP_PASS,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 20,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_QUOTE => ["RMD ".$remoteDir],
+    ]);
+    curl_opts_for_mode($ch);
+    $ok = curl_exec($ch);
+    $err = $ok===false ? curl_error($ch) : null;
+    curl_close($ch);
+    return $ok===false ? ['ok'=>false,'error'=>"RMD error: $err"] : ['ok'=>true];
+}
+function ftp_upload_string($content, $remoteFullPath) {
+    $tmp = tempnam(sys_get_temp_dir(), 'up');
+    file_put_contents($tmp, $content);
+    $res = ftp_put_file($tmp, $remoteFullPath);
+    @unlink($tmp);
+    return $res;
+}
+
+/***** JSON helper & mail *****/
+function send_mail($to,$from,$subject,$body){
+    $headers = "From: $from\r\nReply-To: $from\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n";
+    @mail($to,'=?UTF-8?B?'.base64_encode($subject).'?=',$body,$headers);
+}
+function json_response($arr,$code=200){
+    http_response_code($code);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($arr);
+    exit;
+}
+
+function debug_log($tag, $arr){
+  global $DEBUG_UPLOAD, $DEBUG_LOG_FILE;
+  if (!$DEBUG_UPLOAD) return;
+  $line = date('Y-m-d H:i:s')." [$tag] ".json_encode($arr, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE).PHP_EOL;
+  @file_put_contents($DEBUG_LOG_FILE, $line, FILE_APPEND);
+}
+
+/***** ROUTING — token = etykieta (slug) *****/
+$action = $_GET['action'] ?? null;
+$token  = $_GET['t'] ?? null; // alternatywa (?t=etykieta)
+
+if (!$token) {
+    $uri = $_SERVER['REQUEST_URI'] ?? '';
+    if (strpos($uri,'?')!==false) $uri = strstr($uri,'?', true);
+    $uri = trim($uri,'/');
+    if ($uri !== '' && strpos($uri,'index.php')===false) {
+        $token = basename($uri); // ostatni segment
+    }
+}
+
+// --- DEBUG SWITCH (po wyliczeniu $action i $token) ---
+$_REQ_DEBUG = false;
+// debug z query (?debug=1) — wygodne z frontu
+if (isset($_GET['debug']) && $_GET['debug'] === '1') {
+    $_REQ_DEBUG = true;
+}
+// alternatywnie: ?debug_key=<ADMIN_KEY>
+if (isset($_GET['debug_key']) && $_GET['debug_key'] === $ADMIN_KEY) {
+    $_REQ_DEBUG = true;
+}
+$GLOBALS['_REQ_DEBUG'] = $_REQ_DEBUG;
+// --- /DEBUG SWITCH ---
+
+
+
+/** 1) ADMIN: utwórz link (etykieta = token/URL) */
+if ($action==='new' && $_SERVER['REQUEST_METHOD']==='POST') {
+    // proste API tylko dla Ciebie
+    $key   = $_POST['key'] ?? '';
+    $label = $_POST['label'] ?? '';
+    if ($key !== $ADMIN_KEY) json_response(['error'=>'unauthorized'],401);
+
+    $slug = slugify($label);
+    if ($slug==='') json_response(['error'=>'Podaj etykietę'],400);
+
+    if (file_exists(tok_path($slug))) {
+        json_response(['error'=>'Taka etykieta już istnieje. Wybierz inną.'],409);
+    }
+
+    $folderName = $slug . '-' . date('Y-m-d_H-i');
+    $remoteDir  = rtrim($FTP_ROOTDIR,'/').'/'.$folderName;
+
+    $meta = [
+        'token'      => $slug,
+        'label'      => $label,
+        'created'    => now(),
+        'expires'    => now() + 3600*$TOKEN_TTL_H,
+        'used'       => false,
+        'remote_dir' => $remoteDir,
+        'files'      => []
+    ];
+    file_put_contents(tok_path($slug), json_encode($meta, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
+
+    $pretty = rtrim($BASE_URL,'/').'/'.$slug;
+    json_response(['ok'=>true,'url'=>$pretty,'remote_dir'=>$remoteDir]);
+}
+
+/** 2) API uploadu — 1 plik/żądanie, wspiera relatywne ścieżki (katalogi) */
+if ($action==='upload' && $_SERVER['REQUEST_METHOD']==='POST') {
+    if (!$token) json_response(['ok'=>false,'error'=>'Brak etykiety w URL'],400);
+    $path = tok_path($token);
+    if (!is_file($path)) json_response(['ok'=>false,'error'=>'Taki link nie istnieje'],404);
+    $meta = json_decode(file_get_contents($path), true);
+    if (!$meta) json_response(['ok'=>false,'error'=>'Błąd metadanych'],500);
+    if (!empty($meta['used'])) json_response(['ok'=>false,'error'=>'Link został już użyty'],410);
+    if (now() > ($meta['expires']??0)) json_response(['ok'=>false,'error'=>'Link wygasł'],410);
+
+    if (!isset($_FILES['file'])) json_response(['ok'=>false,'error'=>'Brak pliku'],400);
+
+    $name = $_FILES['file']['name'];
+    $tmp  = $_FILES['file']['tmp_name'];
+    $err  = $_FILES['file']['error'];
+    $size = $_FILES['file']['size'];
+
+    if ($err !== UPLOAD_ERR_OK) json_response(['ok'=>false,'msg'=>"Błąd (kod $err)"],200);
+    if ($size > $MAX_BYTES)     json_response(['ok'=>false,'msg'=>"Przekroczono limit"],200);
+
+    $rel = $_POST['relpath'] ?? $name;
+    $rel = sanitize_rel($rel);
+    if (!ext_ok($rel,$ALLOW_EXT)) json_response(['ok'=>false,'msg'=>"Niedozwolone rozszerzenie"],200);
+
+    $dst = rtrim($meta['remote_dir'],'/').'/'.$rel;
+    $up  = ftp_put_file($tmp,$dst);
+
+    if ($up['ok']) {
+        $meta['files'][] = ['name'=>$name,'rel'=>$rel,'remote'=>$dst,'size'=>$size,'ts'=>now()];
+        file_put_contents($path, json_encode($meta, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
+        json_response(['ok'=>true,'msg'=>'OK']);
+    } else {
+        json_response(['ok'=>false,'msg'=>'Błąd: '.$up['error']],200);
+    }
+}
+
+/** 2b) FINALIZACJA — zamknij link i wyślij e‑mail */
+if ($action==='finalize' && $_SERVER['REQUEST_METHOD']==='POST') {
+    if (!$token) json_response(['ok'=>false,'error'=>'Brak etykiety'],400);
+    $path = tok_path($token);
+    if (!is_file($path)) json_response(['ok'=>false,'error'=>'Link nie istnieje'],404);
+    $meta = json_decode(file_get_contents($path), true);
+    if (!$meta) json_response(['ok'=>false,'error'=>'Błąd metadanych'],500);
+
+    $meta['used'] = true;
+    $meta['used_at'] = now();
+    file_put_contents($path, json_encode($meta, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
+
+    $files = $meta['files'] ?? [];
+    $body  = "Zakończono wysyłkę.\n".
+             "Etykieta: ".($meta['label'] ?? $meta['token'])."\n".
+             "Zdalny katalog: ".$meta['remote_dir']."\n".
+             "Plików: ".count($files)."\n\n";
+    foreach($files as $f){
+        $body .= ' - '.$f['rel'].' ('.number_format($f['size']/1024/1024,2).' MB)'."\n";
+    }
+    send_mail($EMAIL_TO,$EMAIL_FROM,'Uploader: zakończono wysyłkę',$body);
+
+    json_response(['ok'=>true,'count'=>count($files)]);
+}
+
+/** 2c) AUTOTEST — sprawdź zapisywalność i ścieżkę (dla admina) */
+if ($action==='autotest' && $_SERVER['REQUEST_METHOD']==='POST') {
+    $key = $_POST['key'] ?? '';
+    $lab = $_POST['label'] ?? '';
+    if ($key !== $ADMIN_KEY) json_response(['ok'=>false,'error'=>'unauthorized'],401);
+    $slug = slugify($lab);
+    if ($slug==='') json_response(['ok'=>false,'error'=>'Podaj etykietę'],400);
+
+    $path = tok_path($slug);
+    if (!is_file($path)) json_response(['ok'=>false,'error'=>'Taki link nie istnieje'],404);
+    $meta = json_decode(file_get_contents($path), true);
+    $base = rtrim($meta['remote_dir'],'/');
+
+    $testDir  = $base.'/'."_permtest_".date('Ymd_His');
+    $testFile = $testDir.'/ping.txt';
+    $probeTxt = "uploader perm test @ ".date('c');
+
+    $up   = ftp_upload_string($probeTxt, $testFile);
+    $get  = $up['ok'] ? ftp_get_string($testFile) : ['ok'=>false,'error'=>'Pominięto GET – upload się nie powiódł'];
+    $delF = $up['ok'] ? ftp_delete_file($testFile) : ['ok'=>false,'error'=>'Pominięto DELE – upload się nie powiódł'];
+    $delD = $delF['ok'] ? ftp_remove_dir($testDir) : ['ok'=>false,'error'=>'Pominięto RMD – brak pliku lub błąd'];
+
+    $verified = ($get['ok'] ?? false) && (isset($get['data']) && $get['data'] === $probeTxt);
+
+    json_response([
+        'ok' => $up['ok'] && ($get['ok'] ?? true),
+        'remote_dir' => $meta['remote_dir'],
+        'steps' => [
+            'upload' => $up,
+            'download' => $get,
+            'content_match' => $verified,
+            'delete_file' => $delF,
+            'remove_dir' => $delD,
+        ],
+        'hint' => $up['ok'] ? null : 'Jeśli upload nie działa: sprawdź tryb $FTP_MODE/$FTP_PORT, ścieżkę $FTP_ROOTDIR (z lub bez wiodącego "/") i uprawnienia katalogu.'
+    ]);
+}
+
+/***** UI (Bootstrap) *****/
+?>
+<!doctype html>
+<html lang="pl" data-bs-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Uploader</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+  .drop { border:2px dashed var(--bs-border-color); border-radius:.75rem; padding:2rem; text-align:center; }
+  .drop.dragover { background: var(--bs-tertiary-bg); }
+  .file-rel { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body class="py-4">
+<div class="container" style="max-width: 900px;">
+<?php
+$meta = null;
+if ($token) {
+  $p = tok_path($token);
+  if (is_file($p)) $meta = json_decode(file_get_contents($p), true);
+}
+if ($token):
+  if (!$meta): ?>
+    <div class="alert alert-danger">Nieprawidłowy link.</div>
+  <?php elseif (!empty($meta['used'])): ?>
+    <div class="alert alert-warning">Link został już użyty.</div>
+  <?php elseif (now() > ($meta['expires']??0)): ?>
+    <div class="alert alert-warning">Link wygasł.</div>
+  <?php else: ?>
+    <h1 class="h4 mb-3">Prześlij pliki <?= $meta['label'] ? '— '.h($meta['label']) : '' ?></h1>
+    <div class="card">
+      <div class="card-body">
+        <p class="text-body-secondary mb-3">Pliki trafią do: <code><?=h($meta['remote_dir'])?></code></p>
+
+        <div id="drop" class="drop mb-3">
+          Upuść pliki lub folder tutaj, albo wybierz poniżej.
+          <input type="file" id="pickFiles" multiple class="form-control mt-3" />
+          <input type="file" id="pickDir" webkitdirectory directory mozdirectory class="form-control mt-2" />
+        </div>
+
+        <div class="list-group mb-3" id="list"></div>
+
+        <div class="d-flex align-items-center gap-3">
+          <div class="progress flex-grow-1" role="progressbar" aria-label="Postęp całości">
+            <div id="totalbar" class="progress-bar" style="width:0%"></div>
+          </div>
+          <div class="text-body-secondary" id="percent" style="min-width:3rem; text-align:right;">0%</div>
+          <button id="send" class="btn btn-primary">Wyślij</button>
+        </div>
+
+        <p class="text-body-secondary mt-3 mb-0">
+          Dozwolone: <?=implode(', ',$ALLOW_EXT)?>. Limit: <?=number_format($MAX_BYTES/1024/1024)?> MB/plik. Link wygasa po <?=$TOKEN_TTL_H?> h.
+        </p>
+      </div>
+    </div>
+
+    <script>
+      const drop     = document.getElementById('drop');
+      const pickFiles= document.getElementById('pickFiles');
+      const pickDir  = document.getElementById('pickDir');
+      const list     = document.getElementById('list');
+      const sendBtn  = document.getElementById('send');
+      const totalbar = document.getElementById('totalbar');
+      const percent  = document.getElementById('percent');
+
+      let queue = []; // {file, rel, row, pbar}
+
+      function fmtBytes(b){ const u=['B','KB','MB','GB']; let i=0; while(b>1024&&i<u.length-1){ b/=1024;i++; } return b.toFixed(i?1:0)+' '+u[i]; }
+
+      function addRow(f, rel){
+        const row = document.createElement('div');
+        row.className = 'list-group-item';
+        row.innerHTML = `
+          <div class="d-flex align-items-center gap-3">
+            <div class="file-rel flex-grow-1" title="${rel}">${rel}</div>
+            <div class="text-body-secondary" style="min-width:7rem">${fmtBytes(f.size)}</div>
+          </div>
+          <div class="progress mt-2" role="progressbar" aria-label="Postęp pliku">
+            <div class="progress-bar" style="width:0%"></div>
+          </div>
+        `;
+        list.appendChild(row);
+        const pbar = row.querySelector('.progress-bar');
+        queue.push({file:f, rel:rel, row:row, pbar:pbar});
+      }
+
+      pickFiles.addEventListener('change', e=>{
+        for (const f of e.target.files) addRow(f, f.name);
+      });
+      pickDir.addEventListener('change', e=>{
+        for (const f of e.target.files){
+          const rel = f.webkitRelativePath || f.name;
+          addRow(f, rel);
+        }
+      });
+
+      ['dragenter','dragover'].forEach(ev=>{
+        drop.addEventListener(ev, e=>{ e.preventDefault(); e.stopPropagation(); drop.classList.add('dragover'); });
+      });
+      ['dragleave','drop'].forEach(ev=>{
+        drop.addEventListener(ev, e=>{ e.preventDefault(); e.stopPropagation(); drop.classList.remove('dragover'); });
+      });
+      drop.addEventListener('drop', e=>{
+        const items = e.dataTransfer.items;
+        if (items && items.length && 'webkitGetAsEntry' in items[0]) {
+          for (const it of items) {
+            const entry = it.webkitGetAsEntry ? it.webkitGetAsEntry() : null;
+            if (entry) traverseEntry(entry, '');
+          }
+        } else {
+          const files = e.dataTransfer.files;
+          for (const f of files) addRow(f, f.name);
+        }
+      });
+      function traverseEntry(entry, path){
+        if (entry.isFile) {
+          entry.file(f=> addRow(f, path + entry.name));
+        } else if (entry.isDirectory) {
+          const dr = entry.createReader();
+          dr.readEntries(ents=>{
+            for (const en of ents) traverseEntry(en, path + entry.name + '/');
+          });
+        }
+      }
+
+      async function uploadOne(item){
+        return new Promise((resolve)=>{
+          const fd = new FormData();
+          fd.append('file', item.file, item.file.name);
+          fd.append('relpath', item.rel);
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', '?action=upload<?php echo $token ? '&t='.rawurlencode($token) : '';?>');
+          xhr.upload.onprogress = (e)=>{
+            if(e.lengthComputable){
+              item.pbar.style.width = Math.round(e.loaded/e.total*100)+'%';
+            }
+          };
+          xhr.onreadystatechange = ()=>{
+            if (xhr.readyState===4){
+              try{
+                const res = JSON.parse(xhr.responseText);
+                if (!res.ok) {
+                  item.pbar.classList.add('bg-danger');
+                  item.pbar.style.width = '100%';
+                } else {
+                  item.pbar.classList.add('bg-success');
+                  item.pbar.style.width = '100%';
+                }
+              } catch(e){
+                item.pbar.classList.add('bg-danger');
+                item.pbar.style.width = '100%';
+              }
+              resolve();
+            }
+          };
+          xhr.send(fd);
+        });
+      }
+
+      sendBtn.addEventListener('click', async ()=>{
+        if (!queue.length){ alert('Dodaj pliki lub folder.'); return; }
+        sendBtn.disabled = true;
+
+        let done = 0;
+        const total = queue.length;
+
+        for (const it of queue){
+          await uploadOne(it);
+          done++;
+          const p = Math.round(done/total*100);
+          totalbar.style.width = p+'%';
+          percent.textContent = p+'%';
+        }
+
+        // finalize (zamknij link + e-mail)
+        fetch('?action=finalize<?php echo $token ? '&t='.rawurlencode($token) : '';?>',{method:'POST'})
+          .then(r=>r.json()).then(_=>{ sendBtn.textContent='Zakończono'; })
+          .catch(_=>{});
+      });
+    </script>
+  <?php endif; ?>
+<?php else: ?>
+  <!-- PANEL ADMINA -->
+  <h1 class="h4 mb-3">Generator jednorazowych linków</h1>
+  <div class="card mb-4">
+    <div class="card-body">
+      <form id="gen" class="row g-3">
+        <div class="col-12 col-md-4">
+          <label class="form-label">Klucz admina</label>
+          <input type="password" id="key" class="form-control" required>
+        </div>
+        <div class="col-12 col-md-6">
+          <label class="form-label">Etykieta (będzie URL‑em)</label>
+          <input type="text" id="label" class="form-control" placeholder="np. raport-asia" required>
+          <div class="form-text">Litery/cyfry/myślniki, max 64 znaki.</div>
+        </div>
+        <div class="col-12 col-md-2 d-grid align-self-end">
+          <button type="submit" class="btn btn-primary">Utwórz link</button>
+        </div>
+      </form>
+      <div id="out" class="mt-3 text-body-secondary"></div>
+      <p class="text-body-secondary mt-3 mb-0">
+        Link: <code><?=$BASE_URL?>/&lt;etykieta&gt;</code> · Wygasa po <?=$TOKEN_TTL_H?> h · Jednorazowy.
+      </p>
+    </div>
+  </div>
+
+  <h2 class="h6">Autotest uprawnień/ścieżki</h2>
+  <div class="card">
+    <div class="card-body">
+      <form id="autotest" class="row g-2">
+        <div class="col-12 col-md-4">
+          <label class="form-label">Klucz admina</label>
+          <input type="password" id="akey" class="form-control" required>
+        </div>
+        <div class="col-12 col-md-6">
+          <label class="form-label">Etykieta (URL)</label>
+          <input type="text" id="alabel" class="form-control" placeholder="np. raport-asia" required>
+        </div>
+        <div class="col-12 col-md-2 d-grid align-self-end">
+          <button class="btn btn-outline-secondary" type="submit">Testuj</button>
+        </div>
+      </form>
+      <pre id="atestout" class="mt-3 small text-body-secondary" style="white-space:pre-wrap;"></pre>
+    </div>
+  </div>
+
+  <script>
+    // Generator linku
+    const form = document.getElementById('gen');
+    const out  = document.getElementById('out');
+    form.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const key   = document.getElementById('key').value.trim();
+      const label = document.getElementById('label').value.trim();
+      const fd = new FormData();
+      fd.append('key', key);
+      fd.append('label', label);
+      const res = await fetch('?action=new', {method:'POST', body:fd});
+      const json = await res.json();
+      if (json.ok){
+        out.innerHTML = `Link: <a href="${json.url}">${json.url}</a><br>Zdalny katalog: <code>${json.remote_dir}</code>`;
+        try { await navigator.clipboard.writeText(json.url); } catch(e){}
+      } else {
+        out.innerHTML = `<span class="text-danger">Błąd: ${json.error || 'nieznany'}</span>`;
+      }
+    });
+
+    // Autotest
+    const atform=document.getElementById('autotest');
+    const atout =document.getElementById('atestout');
+    atform.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const fd=new FormData();
+      fd.append('key', document.getElementById('akey').value.trim());
+      fd.append('label', document.getElementById('alabel').value.trim());
+      const res=await fetch('?action=autotest',{method:'POST', body:fd});
+      const js=await res.json();
+      atout.textContent = JSON.stringify(js,null,2);
+    });
+  </script>
+<?php endif; ?>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
