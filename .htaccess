@@ -1,0 +1,13 @@
+
+RewriteEngine On
+
+# Bezpośredni dostęp do receiver.php (nie przepisuj)
+RewriteRule ^receiver\.php$ - [L]
+
+# Obsłuż pliki/foldery istniejące normalnie
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Kieruj wszystko inne do index.php (zachowaj ścieżkę jako REQUEST_URI)
+RewriteRule ^ index.php [L,QSA]
