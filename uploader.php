@@ -1,4 +1,3 @@
-
 <?php
 /**
  * File Uploader with Enhanced Debugging
@@ -36,14 +35,14 @@ function ext_ok($name, $allow){
     return $ext==='' || in_array($ext, $allow, true);
 }
 
-function tok_path($token){ 
-    return DATA_DIR.'/tok_'.$token.'.json'; 
+function tok_path($token){
+    return DATA_DIR.'/tok_'.$token.'.json';
 }
 
 /***** ENHANCED DEBUG LOGGING *****/
 function debug_log($tag, $data, $level = 'INFO'){
     if (!DEBUG_UPLOAD) return;
-    
+
     $timestamp = date('Y-m-d H:i:s');
     $logEntry = [
         'timestamp' => $timestamp,
@@ -53,7 +52,7 @@ function debug_log($tag, $data, $level = 'INFO'){
         'memory_usage' => memory_get_usage(true),
         'request_id' => $_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true)
     ];
-    
+
     $line = json_encode($logEntry, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE).PHP_EOL;
     @file_put_contents(DEBUG_LOG_FILE, $line, FILE_APPEND | LOCK_EX);
 }
@@ -73,14 +72,14 @@ function curl_opts_for_mode(&$ch) {
         'host' => FTP_HOST,
         'port' => FTP_PORT
     ]);
-    
+
     if (FTP_MODE === 'explicit') {
         curl_setopt($ch, CURLOPT_USE_SSL, CURLUSESSL_ALL);
         curl_setopt($ch, CURLOPT_FTPSSLAUTH, CURLFTPAUTH_TLS);
     } elseif (FTP_MODE === 'implicit') {
         // ftps:// scheme handles this
     }
-    
+
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
 }
@@ -89,7 +88,7 @@ function build_url($remoteFullPath) {
     $scheme = (FTP_MODE === 'implicit') ? 'ftps' : 'ftp';
     $path   = $remoteFullPath[0] === '/' ? $remoteFullPath : "/$remoteFullPath";
     $url = sprintf('%s://%s:%d%s', $scheme, FTP_HOST, FTP_PORT, $path);
-    
+
     debug_info('FTP_URL', 'Built FTP URL', [
         'scheme' => $scheme,
         'host' => FTP_HOST,
@@ -97,7 +96,7 @@ function build_url($remoteFullPath) {
         'path' => $path,
         'full_url' => $url
     ]);
-    
+
     return $url;
 }
 
@@ -106,26 +105,26 @@ function build_https_url($remoteFullPath) {
     // Assumes files are accessible via HTTPS on the same host
     $path = $remoteFullPath[0] === '/' ? $remoteFullPath : "/$remoteFullPath";
     $url = sprintf('https://%s%s', FTP_HOST, $path);
-    
+
     debug_info('HTTPS_URL', 'Built HTTPS URL', [
         'host' => FTP_HOST,
         'path' => $path,
         'full_url' => $url
     ]);
-    
+
     return $url;
 }
 
 function ftp_ensure_dir($remoteDir) {
     debug_info('FTP_MKDIR', 'Ensuring directory exists', ['path' => $remoteDir]);
-    
+
     // Try to create directory structure recursively
     $pathParts = array_filter(explode('/', trim($remoteDir, '/')));
     $currentPath = '';
-    
+
     foreach ($pathParts as $part) {
         $currentPath .= '/' . $part;
-        
+
         $ch = curl_init();
         curl_setopt_array($ch,[
             CURLOPT_URL => build_url('/'),
@@ -136,22 +135,22 @@ function ftp_ensure_dir($remoteDir) {
             CURLOPT_QUOTE => ["MKD ".$currentPath],
         ]);
         curl_opts_for_mode($ch);
-        
+
         $ok = curl_exec($ch);
         $err = $ok===false ? curl_error($ch) : null;
         curl_close($ch);
-        
+
         debug_info('FTP_MKDIR_STEP', 'Directory creation step', [
             'path' => $currentPath,
             'success' => $ok !== false,
             'error' => $err
         ]);
     }
-    
+
     debug_info('FTP_MKDIR_RESULT', 'Directory creation completed', [
         'final_path' => $remoteDir
     ]);
-    
+
     return ['ok' => true, 'error' => null];
 }
 
@@ -163,7 +162,7 @@ function upload_file($localPath, $remoteFullPath, $retryCount = 0) {
         'http_url_defined' => defined('HTTP_UPLOAD_URL'),
         'http_url_value' => defined('HTTP_UPLOAD_URL') ? HTTP_UPLOAD_URL : 'undefined'
     ]);
-    
+
     switch(UPLOAD_METHOD) {
         case 'http':
             if (!defined('HTTP_UPLOAD_URL') || !HTTP_UPLOAD_URL) {
@@ -171,10 +170,10 @@ function upload_file($localPath, $remoteFullPath, $retryCount = 0) {
                 return ['ok' => false, 'error' => 'HTTP upload URL not configured'];
             }
             return http_chunked_upload($localPath, $remoteFullPath, $retryCount);
-            
+
         case 'ftp':
             return ftp_put_file($localPath, $remoteFullPath, $retryCount);
-            
+
         case 'local':
         default:
             return local_file_upload($localPath, $remoteFullPath, $retryCount);
@@ -189,26 +188,26 @@ function http_chunked_upload($localPath, $remoteFullPath, $retryCount = 0) {
         'retry_attempt' => $retryCount,
         'chunk_size' => CHUNK_SIZE
     ]);
-    
+
     $fileSize = filesize($localPath);
     $localHash = hash_file('md5', $localPath);
     $uploadId = uniqid('upload_', true);
-    
+
     $fp = fopen($localPath, 'rb');
     if (!$fp) {
         debug_error('HTTP_UPLOAD_ERROR', 'Cannot open local file', ['path' => $localPath]);
         return ['ok' => false, 'error' => 'Cannot open local file'];
     }
-    
+
     $chunkNumber = 0;
     $totalChunks = ceil($fileSize / CHUNK_SIZE);
     $uploadedBytes = 0;
-    
+
     while (!feof($fp)) {
         $chunkData = fread($fp, CHUNK_SIZE);
         $chunkSize = strlen($chunkData);
         $chunkHash = md5($chunkData);
-        
+
         $postData = [
             'upload_id' => $uploadId,
             'chunk_number' => $chunkNumber,
@@ -220,7 +219,7 @@ function http_chunked_upload($localPath, $remoteFullPath, $retryCount = 0) {
             'token' => HTTP_UPLOAD_TOKEN,
             'chunk_data' => base64_encode($chunkData)
         ];
-        
+
         $ch = curl_init();
         curl_setopt_array($ch, [
             CURLOPT_URL => HTTP_UPLOAD_URL,
@@ -234,12 +233,12 @@ function http_chunked_upload($localPath, $remoteFullPath, $retryCount = 0) {
                 'Authorization: Bearer ' . HTTP_UPLOAD_TOKEN
             ]
         ]);
-        
+
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error = curl_error($ch);
         curl_close($ch);
-        
+
         if ($response === false || $httpCode !== 200) {
             fclose($fp);
             debug_error('HTTP_CHUNK_FAILED', 'Chunk upload failed', [
@@ -248,16 +247,16 @@ function http_chunked_upload($localPath, $remoteFullPath, $retryCount = 0) {
                 'error' => $error,
                 'response' => $response
             ]);
-            
+
             // Retry logic
             if ($retryCount < 3) {
                 sleep(pow(2, $retryCount)); // Exponential backoff
                 return http_chunked_upload($localPath, $remoteFullPath, $retryCount + 1);
             }
-            
+
             return ['ok' => false, 'error' => "HTTP upload failed: $error"];
         }
-        
+
         $result = json_decode($response, true);
         if (!$result || !$result['ok']) {
             fclose($fp);
@@ -267,25 +266,25 @@ function http_chunked_upload($localPath, $remoteFullPath, $retryCount = 0) {
             ]);
             return ['ok' => false, 'error' => 'Chunk rejected: ' . ($result['error'] ?? 'unknown')];
         }
-        
+
         $uploadedBytes += $chunkSize;
         $chunkNumber++;
-        
+
         debug_info('HTTP_CHUNK_SUCCESS', 'Chunk uploaded successfully', [
             'chunk' => $chunkNumber - 1,
             'progress' => round($uploadedBytes / $fileSize * 100, 2) . '%'
         ]);
     }
-    
+
     fclose($fp);
-    
+
     // Finalize upload
     $finalizeData = [
         'upload_id' => $uploadId,
         'action' => 'finalize',
         'token' => HTTP_UPLOAD_TOKEN
     ];
-    
+
     $ch = curl_init();
     curl_setopt_array($ch, [
         CURLOPT_URL => HTTP_UPLOAD_URL,
@@ -298,19 +297,19 @@ function http_chunked_upload($localPath, $remoteFullPath, $retryCount = 0) {
             'Authorization: Bearer ' . HTTP_UPLOAD_TOKEN
         ]
     ]);
-    
+
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
-    
+
     $result = json_decode($response, true);
-    
+
     debug_info('HTTP_UPLOAD_COMPLETE', 'HTTP upload completed', [
         'success' => $result['ok'] ?? false,
         'integrity_verified' => $result['integrity_verified'] ?? false,
         'remote_hash' => $result['remote_hash'] ?? null
     ]);
-    
+
     return $result ?: ['ok' => false, 'error' => 'Invalid server response'];
 }
 
@@ -321,7 +320,7 @@ function local_file_upload($localPath, $remoteFullPath, $retryCount = 0) {
         'file_size' => file_exists($localPath) ? filesize($localPath) : 0,
         'retry_attempt' => $retryCount
     ]);
-    
+
     $uploadDir = LOCAL_STORAGE_PATH;
     if (!is_dir($uploadDir)) {
         if (!@mkdir($uploadDir, 0775, true)) {
@@ -332,10 +331,10 @@ function local_file_upload($localPath, $remoteFullPath, $retryCount = 0) {
             return ['ok' => false, 'error' => 'Cannot create upload directory: ' . $uploadDir];
         }
     }
-    
+
     $destinationPath = $uploadDir . '/' . ltrim($remoteFullPath, '/');
     $destinationDir = dirname($destinationPath);
-    
+
     if (!is_dir($destinationDir)) {
         if (!@mkdir($destinationDir, 0775, true)) {
             debug_error('LOCAL_UPLOAD_FAILED', 'Cannot create destination directory', [
@@ -344,18 +343,18 @@ function local_file_upload($localPath, $remoteFullPath, $retryCount = 0) {
             return ['ok' => false, 'error' => 'Cannot create directory: ' . $destinationDir];
         }
     }
-    
+
     // Check if source file exists and is readable
     if (!file_exists($localPath)) {
         debug_error('LOCAL_UPLOAD_FAILED', 'Source file not found', ['path' => $localPath]);
         return ['ok' => false, 'error' => 'Source file not found'];
     }
-    
+
     if (!is_readable($localPath)) {
         debug_error('LOCAL_UPLOAD_FAILED', 'Source file not readable', ['path' => $localPath]);
         return ['ok' => false, 'error' => 'Source file not readable'];
     }
-    
+
     // Check destination directory permissions
     if (!is_writable($destinationDir)) {
         debug_error('LOCAL_UPLOAD_FAILED', 'Destination directory not writable', [
@@ -364,16 +363,16 @@ function local_file_upload($localPath, $remoteFullPath, $retryCount = 0) {
         ]);
         return ['ok' => false, 'error' => 'Destination directory not writable: ' . $destinationDir];
     }
-    
+
     $start_time = microtime(true);
     $result = copy($localPath, $destinationPath);
     $duration = microtime(true) - $start_time;
-    
+
     if ($result) {
         $localSize = filesize($localPath);
         $remoteSize = filesize($destinationPath);
         $sizeMatch = ($localSize === $remoteSize);
-        
+
         debug_info('LOCAL_UPLOAD_SUCCESS', 'Local upload completed', [
             'destination' => $destinationPath,
             'duration' => round($duration, 3),
@@ -382,9 +381,9 @@ function local_file_upload($localPath, $remoteFullPath, $retryCount = 0) {
             'size_match' => $sizeMatch,
             'public_url' => str_replace(dirname(__DIR__), '', $destinationPath)
         ]);
-        
+
         $response = ['ok' => true, 'duration' => $duration];
-        
+
         // Add debug info if requested
         if (isset($GLOBALS['_REQ_DEBUG']) && $GLOBALS['_REQ_DEBUG']) {
             $response['debug'] = [
@@ -401,7 +400,7 @@ function local_file_upload($localPath, $remoteFullPath, $retryCount = 0) {
                 ]
             ];
         }
-        
+
         return $response;
     } else {
         $error = error_get_last();
@@ -414,7 +413,7 @@ function local_file_upload($localPath, $remoteFullPath, $retryCount = 0) {
             'dest_dir_writable' => is_writable($destinationDir),
             'free_space' => disk_free_space($destinationDir)
         ]);
-        
+
         return ['ok' => false, 'error' => 'Failed to copy file - check permissions and disk space'];
     }
 }
@@ -426,20 +425,20 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
         'file_size' => file_exists($localPath) ? filesize($localPath) : 'N/A',
         'retry_attempt' => $retryCount
     ]);
-    
+
     // Calculate local file hash for verification
     $localHash = hash_file('md5', $localPath);
     debug_info('UPLOAD_HASH', 'Calculated local file hash', [
         'file' => $localPath,
         'hash' => $localHash
     ]);
-    
+
     // Ensure directory exists
     $remoteDir = dirname($remoteFullPath);
     if ($remoteDir !== '.' && $remoteDir !== '/') {
         ftp_ensure_dir($remoteDir);
     }
-    
+
     $fp = fopen($localPath,'rb');
     if(!$fp) {
         debug_error('UPLOAD_ERROR', 'Cannot open local file', ['path' => $localPath]);
@@ -448,14 +447,14 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
 
     $vstream = fopen('php://temp', 'w+');
     $ch = curl_init();
-    
+
     $url = build_url($remoteFullPath);
     $fileSize = filesize($localPath);
-    
+
     // Konfigurowalne timeouty z możliwością dostosowania przez .env
     $connectTimeout = FTP_CONNECT_TIMEOUT;
     $totalTimeout = max(FTP_TOTAL_TIMEOUT, $fileSize / 512); // minimum config lub 0.5KB/s
-    
+
     curl_setopt_array($ch, [
         CURLOPT_URL => $url,
         CURLOPT_USERPWD => FTP_USER.':'.FTP_PASS,
@@ -475,13 +474,13 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
         CURLOPT_TCP_KEEPIDLE => 1200, // 20 minut idle
         CURLOPT_TCP_KEEPINTVL => 120, // co 2 minuty keepalive
     ]);
-    
+
     curl_opts_for_mode($ch);
 
     $start_time = microtime(true);
     $ok = curl_exec($ch);
     $duration = microtime(true) - $start_time;
-    
+
     $err = $ok ? null : curl_error($ch);
     $code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
     $info = curl_getinfo($ch);
@@ -557,7 +556,7 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
         } else {
             $resp = ['ok'=>false,'error'=>"FTP response code: $code"];
         }
-        
+
         if (!$resp['ok']) {
             debug_error('UPLOAD_FAILED', 'Bad FTP response', [
                 'response_code' => $code,
@@ -582,19 +581,19 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
     $integrityCheck = ['verified' => false, 'local_hash' => $localHash, 'remote_hash' => null];
     if ($resp['ok'] && $uploadSuccess) {
         debug_info('INTEGRITY_CHECK', 'Starting file verification', ['remote_path' => $remoteFullPath]);
-        
+
         $downloadResult = ftp_get_string($remoteFullPath);
         if ($downloadResult['ok']) {
             $remoteHash = hash('md5', $downloadResult['data']);
             $integrityCheck['remote_hash'] = $remoteHash;
             $integrityCheck['verified'] = ($localHash === $remoteHash);
-            
+
             debug_info('INTEGRITY_RESULT', 'File verification completed', [
                 'local_hash' => $localHash,
                 'remote_hash' => $remoteHash,
                 'verified' => $integrityCheck['verified']
             ]);
-            
+
             if (!$integrityCheck['verified']) {
                     $integrityError = [
                         'local_hash' => $localHash,
@@ -605,9 +604,9 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
                         'retry_count' => $retryCount,
                         'timestamp' => date('c')
                     ];
-                    
+
                     debug_error('INTEGRITY_FAILED', 'File integrity check failed', $integrityError);
-                    
+
                     // If integrity failed and we haven't exhausted automatic retries, try again
                     if ($retryCount < 3) {
                         debug_info('INTEGRITY_RETRY', 'Retrying upload due to integrity failure', [
@@ -638,11 +637,11 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
                         $errorReport .= "- Użytkownik może ponownie przesłać plik ręcznie\n";
                         $errorReport .= "- Sprawdź logi FTP serwera\n";
                         $errorReport .= "- Rozważ zwiększenie TIMEOUT w config\n";
-                        
+
                         send_mail(EMAIL_TO, EMAIL_FROM, 'UPLOADER: Błąd integralności pliku', $errorReport);
-                        
+
                         $resp = [
-                            'ok' => false, 
+                            'ok' => false,
                             'error' => 'Integralność pliku nie została zachowana - użyj przycisku "Ponów przesłanie" aby spróbować ponownie',
                             'integrity_details' => $integrityError,
                             'can_retry' => true,
@@ -688,7 +687,7 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
 
 function ftp_get_string($remoteFullPath) {
     debug_info('FTP_GET', 'Getting file content', ['path' => $remoteFullPath]);
-    
+
     $ch = curl_init();
     curl_setopt_array($ch, [
         CURLOPT_URL => build_url($remoteFullPath),
@@ -698,12 +697,12 @@ function ftp_get_string($remoteFullPath) {
         CURLOPT_TIMEOUT => 60,
     ]);
     curl_opts_for_mode($ch);
-    
+
     $out = curl_exec($ch);
     $err = $out===false ? curl_error($ch) : null;
     $code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
     curl_close($ch);
-    
+
     if ($out===false) {
         debug_error('FTP_GET_ERROR', 'GET failed', ['error' => $err]);
         return ['ok'=>false,'error'=>"GET error: $err"];
@@ -712,14 +711,14 @@ function ftp_get_string($remoteFullPath) {
         debug_error('FTP_GET_ERROR', 'GET bad response', ['code' => $code]);
         return ['ok'=>false,'error'=>"GET code: $code"];
     }
-    
+
     debug_info('FTP_GET_SUCCESS', 'GET completed', ['content_length' => strlen($out)]);
     return ['ok'=>true,'data'=>$out];
 }
 
 function ftp_delete_file($remoteFullPath){
     debug_info('FTP_DELETE', 'Deleting file', ['path' => $remoteFullPath]);
-    
+
     $ch = curl_init();
     curl_setopt_array($ch,[
         CURLOPT_URL => build_url('/'),
@@ -730,23 +729,23 @@ function ftp_delete_file($remoteFullPath){
         CURLOPT_QUOTE => ["DELE ".$remoteFullPath],
     ]);
     curl_opts_for_mode($ch);
-    
+
     $ok = curl_exec($ch);
     $err = $ok===false ? curl_error($ch) : null;
     curl_close($ch);
-    
+
     if ($ok === false) {
         debug_error('FTP_DELETE_ERROR', 'Delete failed', ['error' => $err]);
         return ['ok'=>false,'error'=>"DELE error: $err"];
     }
-    
+
     debug_info('FTP_DELETE_SUCCESS', 'File deleted');
     return ['ok'=>true];
 }
 
 function ftp_remove_dir($remoteDir){
     debug_info('FTP_RMDIR', 'Removing directory', ['path' => $remoteDir]);
-    
+
     $ch = curl_init();
     curl_setopt_array($ch,[
         CURLOPT_URL => build_url('/'),
@@ -757,16 +756,16 @@ function ftp_remove_dir($remoteDir){
         CURLOPT_QUOTE => ["RMD ".$remoteDir],
     ]);
     curl_opts_for_mode($ch);
-    
+
     $ok = curl_exec($ch);
     $err = $ok===false ? curl_error($ch) : null;
     curl_close($ch);
-    
+
     if ($ok === false) {
         debug_error('FTP_RMDIR_ERROR', 'Remove directory failed', ['error' => $err]);
         return ['ok'=>false,'error'=>"RMD error: $err"];
     }
-    
+
     debug_info('FTP_RMDIR_SUCCESS', 'Directory removed');
     return ['ok'=>true];
 }
@@ -782,7 +781,7 @@ function ftp_upload_string($content, $remoteFullPath) {
 /***** RESPONSE HELPERS *****/
 function send_mail($to,$from,$subject,$body){
     debug_info('EMAIL', 'Sending notification', ['to' => $to, 'subject' => $subject, 'method' => defined('SMTP_HOST') ? 'SMTP' : 'PHP mail()']);
-    
+
     // Try SMTP if configured
     if (defined('SMTP_HOST') && defined('SMTP_USER') && defined('SMTP_PASS')) {
         $result = send_mail_smtp($to, $from, $subject, $body);
@@ -793,17 +792,17 @@ function send_mail($to,$from,$subject,$body){
             debug_error('EMAIL_SMTP_FAILED', 'SMTP failed, falling back to mail()', ['error' => $result['error']]);
         }
     }
-    
+
     // Fallback to PHP mail()
     $headers = "From: $from\r\nReply-To: $from\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n";
     $result = @mail($to,'=?UTF-8?B?'.base64_encode($subject).'?=',$body,$headers);
-    
+
     if ($result) {
         debug_info('EMAIL_SUCCESS', 'PHP mail() sent successfully');
     } else {
         debug_error('EMAIL_FAILED', 'Both SMTP and mail() failed');
     }
-    
+
     return $result;
 }
 
@@ -813,19 +812,19 @@ function send_mail_smtp($to, $from, $subject, $body) {
     $user = SMTP_USER;
     $pass = SMTP_PASS;
     $secure = defined('SMTP_SECURE') ? SMTP_SECURE : 'tls';
-    
+
     debug_info('SMTP_ATTEMPT', 'Attempting SMTP connection', [
         'host' => $host,
         'port' => $port,
         'user' => $user,
         'secure' => $secure
     ]);
-    
+
     $socket = @fsockopen($host, $port, $errno, $errstr, 30);
     if (!$socket) {
         return ['success' => false, 'error' => "Connection failed: $errstr ($errno)"];
     }
-    
+
     // Simple SMTP implementation
     $commands = [
         "EHLO " . ($_SERVER['SERVER_NAME'] ?? 'localhost'),
@@ -836,18 +835,18 @@ function send_mail_smtp($to, $from, $subject, $body) {
         "RCPT TO: <$to>",
         "DATA"
     ];
-    
+
     foreach ($commands as $cmd) {
         fwrite($socket, "$cmd\r\n");
         $response = fgets($socket);
         debug_info('SMTP_COMMAND', 'SMTP command sent', ['command' => $cmd, 'response' => trim($response)]);
-        
+
         if (!$response || (substr($response, 0, 1) != '2' && substr($response, 0, 1) != '3')) {
             fclose($socket);
             return ['success' => false, 'error' => "SMTP Error: $response"];
         }
     }
-    
+
     // Send email content
     $email_content = "Subject: $subject\r\n";
     $email_content .= "From: $from\r\n";
@@ -855,13 +854,13 @@ function send_mail_smtp($to, $from, $subject, $body) {
     $email_content .= "MIME-Version: 1.0\r\n";
     $email_content .= "Content-Type: text/plain; charset=UTF-8\r\n\r\n";
     $email_content .= $body . "\r\n.\r\n";
-    
+
     fwrite($socket, $email_content);
     $response = fgets($socket);
-    
+
     fwrite($socket, "QUIT\r\n");
     fclose($socket);
-    
+
     if (substr($response, 0, 1) == '2') {
         return ['success' => true];
     } else {
@@ -913,9 +912,9 @@ debug_info('REQUEST', 'Processing request', [
 if ($action==='new' && $_SERVER['REQUEST_METHOD']==='POST') {
     $key   = $_POST['key'] ?? '';
     $label = $_POST['label'] ?? '';
-    
+
     debug_info('ADMIN_NEW', 'Creating new link', ['label' => $label]);
-    
+
     if ($key !== ADMIN_KEY) {
         debug_error('ADMIN_NEW', 'Unauthorized access attempt');
         json_response(['error'=>'unauthorized'],401);
@@ -939,22 +938,35 @@ if ($action==='new' && $_SERVER['REQUEST_METHOD']==='POST') {
         'token'      => $slug,
         'label'      => $label,
         'created'    => now(),
-        'expires'    => now() + 3600*TOKEN_TTL_H,
+        'expires'    => now() + 3600*TOKEN_TTL_HOURS,
         'used'       => false,
         'remote_dir' => $remoteDir,
         'files'      => []
     ];
-    
-    file_put_contents(tok_path($slug), json_encode($meta, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
+
+    // Attempt to create the DATA_DIR if it doesn't exist
+    if (!is_dir(DATA_DIR)) {
+        if (!mkdir(DATA_DIR, 0775, true)) {
+            debug_error('ADMIN_NEW', 'Failed to create DATA_DIR', ['dir' => DATA_DIR]);
+            json_response(['error' => 'Failed to create data directory on server. Please check permissions.'], 500);
+        }
+    }
+
+    // Attempt to write the metadata file
+    if (file_put_contents(tok_path($slug), json_encode($meta, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)) === false) {
+        debug_error('ADMIN_NEW', 'Failed to write metadata file', ['path' => tok_path($slug)]);
+        json_response(['error' => 'Failed to save metadata for the new link. Check directory permissions.'], 500);
+    }
+
 
     $pretty = rtrim(BASE_URL,'/').'/'.$slug;
-    
+
     debug_info('ADMIN_NEW_SUCCESS', 'Link created', [
         'url' => $pretty,
         'remote_dir' => $remoteDir,
         'expires' => date('Y-m-d H:i:s', $meta['expires'])
     ]);
-    
+
     json_response(['ok'=>true,'url'=>$pretty,'remote_dir'=>$remoteDir]);
 }
 
@@ -964,24 +976,24 @@ if ($action==='upload' && $_SERVER['REQUEST_METHOD']==='POST') {
         debug_error('UPLOAD', 'No token provided');
         json_response(['ok'=>false,'error'=>'Brak etykiety w URL'],400);
     }
-    
+
     $path = tok_path($token);
     if (!is_file($path)) {
         debug_error('UPLOAD', 'Token file not found', ['token' => $token]);
         json_response(['ok'=>false,'error'=>'Taki link nie istnieje'],404);
     }
-    
+
     $meta = json_decode(file_get_contents($path), true);
     if (!$meta) {
         debug_error('UPLOAD', 'Invalid metadata', ['token' => $token]);
         json_response(['ok'=>false,'error'=>'Błąd metadanych'],500);
     }
-    
+
     if (!empty($meta['used'])) {
         debug_error('UPLOAD', 'Link already used', ['token' => $token]);
         json_response(['ok'=>false,'error'=>'Link został już użyty'],410);
     }
-    
+
     if (now() > ($meta['expires']??0)) {
         debug_error('UPLOAD', 'Link expired', ['token' => $token, 'expired_at' => date('Y-m-d H:i:s', $meta['expires'])]);
         json_response(['ok'=>false,'error'=>'Link wygasł'],410);
@@ -1008,7 +1020,7 @@ if ($action==='upload' && $_SERVER['REQUEST_METHOD']==='POST') {
         debug_error('UPLOAD', 'PHP upload error', ['error_code' => $err]);
         json_response(['ok'=>false,'msg'=>"Błąd uploadu (kod $err)"],200);
     }
-    
+
     if ($size > MAX_BYTES) {
         debug_error('UPLOAD', 'File too large', ['size' => $size, 'limit' => MAX_BYTES]);
         json_response(['ok'=>false,'msg'=>"Przekroczono limit rozmiaru"],200);
@@ -1016,7 +1028,7 @@ if ($action==='upload' && $_SERVER['REQUEST_METHOD']==='POST') {
 
     $rel = $_POST['relpath'] ?? $name;
     $rel = sanitize_rel($rel);
-    
+
     if (!ext_ok($rel, ALLOW_EXT)) {
         debug_error('UPLOAD', 'Invalid extension', ['file' => $rel, 'allowed' => ALLOW_EXT]);
         json_response(['ok'=>false,'msg'=>"Niedozwolone rozszerzenie"],200);
@@ -1027,14 +1039,18 @@ if ($action==='upload' && $_SERVER['REQUEST_METHOD']==='POST') {
 
     if ($up['ok']) {
         $meta['files'][] = ['name'=>$name,'rel'=>$rel,'remote'=>$dst,'size'=>$size,'ts'=>now()];
-        file_put_contents($path, json_encode($meta, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
-        
+        // Attempt to save metadata, handle potential errors
+        if (file_put_contents($path, json_encode($meta, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)) === false) {
+            debug_error('UPLOAD_METADATA_SAVE_FAILED', 'Failed to save metadata after upload', ['path' => $path]);
+            // Continue, but log the error
+        }
+
         debug_info('UPLOAD_SUCCESS', 'File uploaded successfully', [
             'file' => $name,
             'destination' => $dst,
             'size' => $size
         ]);
-        
+
         $response = ['ok'=>true,'msg'=>'OK'];
         if (isset($up['debug'])) {
             $response['debug'] = $up['debug'];
@@ -1061,10 +1077,10 @@ if ($action==='upload' && $_SERVER['REQUEST_METHOD']==='POST') {
 /** 3) Finalize upload */
 if ($action==='finalize' && $_SERVER['REQUEST_METHOD']==='POST') {
     if (!$token) json_response(['ok'=>false,'error'=>'Brak etykiety'],400);
-    
+
     $path = tok_path($token);
     if (!is_file($path)) json_response(['ok'=>false,'error'=>'Link nie istnieje'],404);
-    
+
     $meta = json_decode(file_get_contents($path), true);
     if (!$meta) json_response(['ok'=>false,'error'=>'Błąd metadanych'],500);
 
@@ -1075,18 +1091,22 @@ if ($action==='finalize' && $_SERVER['REQUEST_METHOD']==='POST') {
 
     $meta['used'] = true;
     $meta['used_at'] = now();
-    file_put_contents($path, json_encode($meta, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
+    // Attempt to save metadata, handle potential errors
+    if (file_put_contents($path, json_encode($meta, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)) === false) {
+        debug_error('FINALIZE_METADATA_SAVE_FAILED', 'Failed to save metadata after finalizing', ['path' => $path]);
+        // Continue, but log the error
+    }
 
     $files = $meta['files'] ?? [];
     $body  = "Zakończono wysyłkę.\n".
              "Etykieta: ".($meta['label'] ?? $meta['token'])."\n".
              "Zdalny katalog: ".$meta['remote_dir']."\n".
              "Plików: ".count($files)."\n\n";
-    
+
     foreach($files as $f){
         $body .= ' - '.$f['rel'].' ('.number_format($f['size']/1024/1024,2).' MB)'."\n";
     }
-    
+
     send_mail(EMAIL_TO, EMAIL_FROM, 'Uploader: zakończono wysyłkę', $body);
 
     debug_info('FINALIZE_SUCCESS', 'Upload finalized', ['file_count' => count($files)]);
@@ -1099,13 +1119,13 @@ if ($action==='retry' && $_SERVER['REQUEST_METHOD']==='POST') {
         debug_error('RETRY', 'No token provided');
         json_response(['ok'=>false,'error'=>'Brak etykiety w URL'],400);
     }
-    
+
     $path = tok_path($token);
     if (!is_file($path)) {
         debug_error('RETRY', 'Token file not found', ['token' => $token]);
         json_response(['ok'=>false,'error'=>'Taki link nie istnieje'],404);
     }
-    
+
     $meta = json_decode(file_get_contents($path), true);
     if (!$meta) {
         debug_error('RETRY', 'Invalid metadata', ['token' => $token]);
@@ -1132,7 +1152,7 @@ if ($action==='retry' && $_SERVER['REQUEST_METHOD']==='POST') {
         debug_error('RETRY', 'PHP upload error', ['error_code' => $err]);
         json_response(['ok'=>false,'msg'=>"Błąd uploadu (kod $err)"],200);
     }
-    
+
     if ($size > MAX_BYTES) {
         debug_error('RETRY', 'File too large', ['size' => $size, 'limit' => MAX_BYTES]);
         json_response(['ok'=>false,'msg'=>"Przekroczono limit rozmiaru"],200);
@@ -1140,14 +1160,14 @@ if ($action==='retry' && $_SERVER['REQUEST_METHOD']==='POST') {
 
     $rel = $_POST['relpath'] ?? $name;
     $rel = sanitize_rel($rel);
-    
+
     if (!ext_ok($rel, ALLOW_EXT)) {
         debug_error('RETRY', 'Invalid extension', ['file' => $rel, 'allowed' => ALLOW_EXT]);
         json_response(['ok'=>false,'msg'=>"Niedozwolone rozszerzenie"],200);
     }
 
     $dst = rtrim($meta['remote_dir'],'/').'/'.$rel;
-    
+
     // Force retry (reset retry count)
     $up = upload_file($tmp, $dst, 0);
 
@@ -1163,19 +1183,23 @@ if ($action==='retry' && $_SERVER['REQUEST_METHOD']==='POST') {
                 break;
             }
         }
-        
+
         if (!$fileUpdated) {
             $meta['files'][] = ['name'=>$name,'rel'=>$rel,'remote'=>$dst,'size'=>$size,'ts'=>now(),'retried'=>true];
         }
-        
-        file_put_contents($path, json_encode($meta, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
-        
+
+        // Attempt to save metadata, handle potential errors
+        if (file_put_contents($path, json_encode($meta, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)) === false) {
+            debug_error('RETRY_METADATA_SAVE_FAILED', 'Failed to save metadata after retry', ['path' => $path]);
+            // Continue, but log the error
+        }
+
         debug_info('RETRY_SUCCESS', 'Manual retry successful', [
             'file' => $name,
             'destination' => $dst,
             'size' => $size
         ]);
-        
+
         $response = ['ok'=>true,'msg'=>'Plik ponownie przesłany pomyślnie'];
         if (isset($up['debug'])) {
             $response['debug'] = $up['debug'];
@@ -1201,14 +1225,14 @@ if ($action==='retry' && $_SERVER['REQUEST_METHOD']==='POST') {
 /** 5) Email test */
 if ($action==='emailtest' && $_SERVER['REQUEST_METHOD']==='POST') {
     $key = $_POST['key'] ?? '';
-    
+
     if ($key !== ADMIN_KEY) {
         debug_error('EMAIL_TEST', 'Unauthorized access attempt');
         json_response(['ok'=>false,'error'=>'unauthorized'],401);
     }
-    
+
     debug_info('EMAIL_TEST', 'Starting email test');
-    
+
     $testSubject = 'Test email z uploadera - ' . date('Y-m-d H:i:s');
     $testBody = "To jest testowy email z uploadera.\n\n";
     $testBody .= "Czas wysłania: " . date('c') . "\n";
@@ -1216,9 +1240,9 @@ if ($action==='emailtest' && $_SERVER['REQUEST_METHOD']==='POST') {
     $testBody .= "- Email do: " . EMAIL_TO . "\n";
     $testBody .= "- Email od: " . EMAIL_FROM . "\n";
     $testBody .= "- SMTP: " . (defined('SMTP_HOST') ? SMTP_HOST : 'nie skonfigurowane') . "\n";
-    
+
     $result = send_mail(EMAIL_TO, EMAIL_FROM, $testSubject, $testBody);
-    
+
     json_response([
         'ok' => (bool)$result,
         'message' => $result ? 'Email testowy wysłany' : 'Błąd wysyłania emaila',
@@ -1234,20 +1258,43 @@ if ($action==='emailtest' && $_SERVER['REQUEST_METHOD']==='POST') {
 /** 6) Debug logs */
 if ($action==='debuglogs' && $_SERVER['REQUEST_METHOD']==='GET') {
     $key = $_GET['key'] ?? '';
-    
+
     if ($key !== ADMIN_KEY) {
         json_response(['ok'=>false,'error'=>'unauthorized'],401);
     }
-    
+
     // Show recent error logs
     $errorLog = ini_get('error_log');
-    if (!$errorLog) $errorLog = '/tmp/php_errors.log';
-    
+    if (!$errorLog) $errorLog = '/tmp/php_errors.log'; // Default path if not set
+
     $logs = '';
     if (file_exists($errorLog)) {
-        $logs = tail($errorLog, 100); // Last 100 lines
+        // Ensure we read only a reasonable amount of logs
+        $fileHandle = fopen($errorLog, 'rb');
+        if ($fileHandle) {
+            $logs = '';
+            $lineCount = 0;
+            $buffer = '';
+            while (($line = fgets($fileHandle)) !== false) {
+                $buffer .= $line;
+                // Basic check for log entry format to count lines accurately
+                if (str_starts_with(trim($line), '[')) { // Assuming log lines start with timestamp
+                    $logs .= $line;
+                    $lineCount++;
+                    if ($lineCount > 100) { // Limit to last 100 lines
+                        // Remove the oldest line from the buffer
+                        $logs = substr($logs, strpos($logs, $line) + strlen($line));
+                    }
+                }
+            }
+            fclose($fileHandle);
+        } else {
+            $logs = "Could not open log file: $errorLog";
+        }
+    } else {
+        $logs = "Log file not found: $errorLog";
     }
-    
+
     header('Content-Type: text/plain');
     echo "=== PHP ERROR LOGS ===\n\n";
     echo $logs;
@@ -1263,16 +1310,18 @@ function tail($filename, $lines = 10) {
 if ($action==='autotest' && $_SERVER['REQUEST_METHOD']==='POST') {
     $key = $_POST['key'] ?? '';
     $lab = $_POST['label'] ?? '';
-    
+
     if ($key !== ADMIN_KEY) json_response(['ok'=>false,'error'=>'unauthorized'],401);
-    
+
     $slug = slugify($lab);
     if ($slug==='') json_response(['ok'=>false,'error'=>'Podaj etykietę'],400);
 
     $path = tok_path($slug);
     if (!is_file($path)) json_response(['ok'=>false,'error'=>'Taki link nie istnieje'],404);
-    
+
     $meta = json_decode(file_get_contents($path), true);
+    if (!$meta) json_response(['ok'=>false,'error'=>'Błąd metadanych'],500);
+
     $base = rtrim($meta['remote_dir'],'/');
 
     debug_info('AUTOTEST', 'Starting autotest', ['slug' => $slug, 'base_dir' => $base]);

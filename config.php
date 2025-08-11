@@ -60,7 +60,7 @@ if (!empty($_ENV['FTP_HOST'])) {
 // Upload limits
 define('MAX_BYTES', (int)($_ENV['MAX_BYTES'] ?? 500 * 1024 * 1024));
 define('ALLOW_EXT', explode(',', $_ENV['ALLOWED_EXTENSIONS'] ?? 'pdf,jpg,jpeg,png,zip,txt,mp3,wav,mov,mp4,avi'));
-define('TOKEN_TTL_H', (int)($_ENV['TOKEN_TTL_HOURS'] ?? 72));
+define('TOKEN_TTL_HOURS', (int)($_ENV['TOKEN_TTL_HOURS'] ?? 72));
 
 // Email configuration
 define('EMAIL_TO', $_ENV['EMAIL_TO'] ?? 'admin@example.com');
