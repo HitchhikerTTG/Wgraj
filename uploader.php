@@ -104,27 +104,40 @@ function build_url($remoteFullPath) {
 function ftp_ensure_dir($remoteDir) {
     debug_info('FTP_MKDIR', 'Ensuring directory exists', ['path' => $remoteDir]);
     
-    $ch = curl_init();
-    curl_setopt_array($ch,[
-        CURLOPT_URL => build_url('/'),
-        CURLOPT_USERPWD => FTP_USER.':'.FTP_PASS,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_CONNECTTIMEOUT => 20,
-        CURLOPT_TIMEOUT => 30,
-        CURLOPT_QUOTE => ["MKD ".$remoteDir],
+    // Try to create directory structure recursively
+    $pathParts = array_filter(explode('/', trim($remoteDir, '/')));
+    $currentPath = '';
+    
+    foreach ($pathParts as $part) {
+        $currentPath .= '/' . $part;
+        
+        $ch = curl_init();
+        curl_setopt_array($ch,[
+            CURLOPT_URL => build_url('/'),
+            CURLOPT_USERPWD => FTP_USER.':'.FTP_PASS,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 20,
+            CURLOPT_TIMEOUT => 30,
+            CURLOPT_QUOTE => ["MKD ".$currentPath],
+        ]);
+        curl_opts_for_mode($ch);
+        
+        $ok = curl_exec($ch);
+        $err = $ok===false ? curl_error($ch) : null;
+        curl_close($ch);
+        
+        debug_info('FTP_MKDIR_STEP', 'Directory creation step', [
+            'path' => $currentPath,
+            'success' => $ok !== false,
+            'error' => $err
+        ]);
+    }
+    
+    debug_info('FTP_MKDIR_RESULT', 'Directory creation completed', [
+        'final_path' => $remoteDir
     ]);
-    curl_opts_for_mode($ch);
     
-    $ok = curl_exec($ch);
-    $err = $ok===false ? curl_error($ch) : null;
-    curl_close($ch);
-    
-    debug_info('FTP_MKDIR_RESULT', 'Directory creation result', [
-        'success' => $ok !== false,
-        'error' => $err
-    ]);
-    
-    return ['ok' => $ok !== false, 'error' => $err];
+    return ['ok' => true, 'error' => null];
 }
 
 function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
