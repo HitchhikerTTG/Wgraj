@@ -101,6 +101,21 @@ function build_url($remoteFullPath) {
     return $url;
 }
 
+function build_https_url($remoteFullPath) {
+    // Convert FTP path to HTTPS URL
+    // Assumes files are accessible via HTTPS on the same host
+    $path = $remoteFullPath[0] === '/' ? $remoteFullPath : "/$remoteFullPath";
+    $url = sprintf('https://%s%s', FTP_HOST, $path);
+    
+    debug_info('HTTPS_URL', 'Built HTTPS URL', [
+        'host' => FTP_HOST,
+        'path' => $path,
+        'full_url' => $url
+    ]);
+    
+    return $url;
+}
+
 function ftp_ensure_dir($remoteDir) {
     debug_info('FTP_MKDIR', 'Ensuring directory exists', ['path' => $remoteDir]);
     
@@ -549,10 +564,12 @@ if ($action==='upload' && $_SERVER['REQUEST_METHOD']==='POST') {
         $response = ['ok'=>true,'msg'=>'OK'];
         if (isset($up['debug'])) {
             $response['debug'] = $up['debug'];
-            // Add file URL in debug mode
+            // Add file URLs in debug mode
             if ($_REQ_DEBUG) {
-                $fileUrl = build_url($dst);
-                $response['debug']['file_url'] = $fileUrl;
+                $ftpUrl = build_url($dst);
+                $httpsUrl = build_https_url($dst);
+                $response['debug']['file_url_ftp'] = $ftpUrl;
+                $response['debug']['file_url_https'] = $httpsUrl;
                 $response['debug']['file_path'] = $dst;
             }
         }
