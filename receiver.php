@@ -21,6 +21,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit(0);
 }
 
+// Handle GET requests for testing
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    error_log("RECEIVER: GET request - returning status");
+    echo json_encode([
+        'ok' => true,
+        'status' => 'receiver.php is working',
+        'time' => date('Y-m-d H:i:s'),
+        'upload_method' => UPLOAD_METHOD,
+        'local_storage_path' => LOCAL_STORAGE_PATH
+    ]);
+    exit;
+}
+
 // Only allow POST requests
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
