@@ -928,7 +928,35 @@ if ($action==='emailtest' && $_SERVER['REQUEST_METHOD']==='POST') {
     ]);
 }
 
-/** 6) Autotest */
+/** 6) Debug logs */
+if ($action==='debuglogs' && $_SERVER['REQUEST_METHOD']==='GET') {
+    $key = $_GET['key'] ?? '';
+    
+    if ($key !== ADMIN_KEY) {
+        json_response(['ok'=>false,'error'=>'unauthorized'],401);
+    }
+    
+    // Show recent error logs
+    $errorLog = ini_get('error_log');
+    if (!$errorLog) $errorLog = '/tmp/php_errors.log';
+    
+    $logs = '';
+    if (file_exists($errorLog)) {
+        $logs = tail($errorLog, 100); // Last 100 lines
+    }
+    
+    header('Content-Type: text/plain');
+    echo "=== PHP ERROR LOGS ===\n\n";
+    echo $logs;
+    exit;
+}
+
+function tail($filename, $lines = 10) {
+    $data = file($filename);
+    return implode('', array_slice($data, -$lines));
+}
+
+/** 7) Autotest */
 if ($action==='autotest' && $_SERVER['REQUEST_METHOD']==='POST') {
     $key = $_POST['key'] ?? '';
     $lab = $_POST['label'] ?? '';

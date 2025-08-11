@@ -10,18 +10,52 @@ function loadEnv($file = '.env') {
         throw new Exception("Environment file {$file} not found");
     }
     
+    $content = file_get_contents($file);
+    error_log("=== LOADING .ENV FILE ===");
+    error_log("File exists: " . ($file));
+    error_log("File size: " . strlen($content) . " bytes");
+    error_log("File encoding: " . mb_detect_encoding($content));
+    
     $lines = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-    foreach ($lines as $line) {
-        if (strpos($line, '#') === 0) continue; // Skip comments
+    error_log("Total lines after filtering: " . count($lines));
+    
+    foreach ($lines as $lineNum => $line) {
+        error_log("--- Processing line " . ($lineNum + 1) . " ---");
+        error_log("Raw line: '" . addslashes($line) . "'");
+        error_log("Line length: " . strlen($line));
+        error_log("Line bytes: " . bin2hex($line));
+        
+        if (strpos($line, '#') === 0) {
+            error_log("Skipping comment line");
+            continue; // Skip comments
+        }
         
         $parts = explode('=', $line, 2);
+        error_log("Parts count: " . count($parts));
+        
         if (count($parts) === 2) {
             $key = trim($parts[0]);
             $value = trim($parts[1]);
-            $_ENV[$key] = $value;
-            putenv("{$key}={$value}");
+            error_log("Key: '" . addslashes($key) . "'");
+            error_log("Value: '" . addslashes($value) . "'");
+            
+            try {
+                $_ENV[$key] = $value;
+                putenv("{$key}={$value}");
+                error_log("SUCCESS: Set {$key}");
+            } catch (Exception $e) {
+                error_log("ERROR setting env var {$key}: " . $e->getMessage());
+                throw new Exception("Error setting environment variable {$key}: " . $e->getMessage());
+            }
+        } else {
+            error_log("WARNING: Line doesn't contain exactly one '=' character");
+            if (count($parts) === 1 && trim($parts[0]) !== '') {
+                error_log("ERROR: Line '" . addslashes($line) . "' is malformed - missing '=' character");
+                throw new Exception("Malformed line in .env file (line " . ($lineNum + 1) . "): missing '=' character in '" . $line . "'");
+            }
         }
     }
+    error_log("=== .ENV LOADING COMPLETED ===");
 }
 
 // Load environment
