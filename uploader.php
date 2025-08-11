@@ -101,12 +101,44 @@ function build_url($remoteFullPath) {
     return $url;
 }
 
+function ftp_ensure_dir($remoteDir) {
+    debug_info('FTP_MKDIR', 'Ensuring directory exists', ['path' => $remoteDir]);
+    
+    $ch = curl_init();
+    curl_setopt_array($ch,[
+        CURLOPT_URL => build_url('/'),
+        CURLOPT_USERPWD => FTP_USER.':'.FTP_PASS,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 20,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_QUOTE => ["MKD ".$remoteDir],
+    ]);
+    curl_opts_for_mode($ch);
+    
+    $ok = curl_exec($ch);
+    $err = $ok===false ? curl_error($ch) : null;
+    curl_close($ch);
+    
+    debug_info('FTP_MKDIR_RESULT', 'Directory creation result', [
+        'success' => $ok !== false,
+        'error' => $err
+    ]);
+    
+    return ['ok' => $ok !== false, 'error' => $err];
+}
+
 function ftp_put_file($localPath, $remoteFullPath) {
     debug_info('UPLOAD_START', 'Starting file upload', [
         'local_path' => $localPath,
         'remote_path' => $remoteFullPath,
         'file_size' => file_exists($localPath) ? filesize($localPath) : 'N/A'
     ]);
+    
+    // Ensure directory exists
+    $remoteDir = dirname($remoteFullPath);
+    if ($remoteDir !== '.' && $remoteDir !== '/') {
+        ftp_ensure_dir($remoteDir);
+    }
     
     $fp = fopen($localPath,'rb');
     if(!$fp) {
@@ -170,10 +202,15 @@ function ftp_put_file($localPath, $remoteFullPath) {
             'verbose' => $verbose
         ]);
     } elseif($code >= 400) {
-        $resp = ['ok'=>false,'error'=>"FTP response code: $code"];
+        $errorMsg = "FTP response code: $code";
+        if ($code == 451) {
+            $errorMsg .= " (Brak uprawnień lub problem z katalogiem docelowym)";
+        }
+        $resp = ['ok'=>false,'error'=>$errorMsg];
         debug_error('UPLOAD_FAILED', 'Bad FTP response', [
             'response_code' => $code,
-            'verbose' => $verbose
+            'verbose' => $verbose,
+            'hint' => $code == 451 ? 'Check directory permissions or path' : null
         ]);
     } else {
         $resp = ['ok'=>true];
