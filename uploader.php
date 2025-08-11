@@ -179,19 +179,30 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
     $ch = curl_init();
     
     $url = build_url($remoteFullPath);
+    $fileSize = filesize($localPath);
+    
+    // Zwiększone timeouty dla większych plików
+    $connectTimeout = 60;
+    $totalTimeout = max(1800, $fileSize / 1024); // minimum 30 min lub 1KB/s
     
     curl_setopt_array($ch, [
         CURLOPT_URL => $url,
         CURLOPT_USERPWD => FTP_USER.':'.FTP_PASS,
         CURLOPT_UPLOAD => true,
         CURLOPT_INFILE => $fp,
-        CURLOPT_INFILESIZE => filesize($localPath),
+        CURLOPT_INFILESIZE => $fileSize,
         CURLOPT_FTP_CREATE_MISSING_DIRS => CURLFTP_CREATE_DIR,
-        CURLOPT_CONNECTTIMEOUT => 60,
-        CURLOPT_TIMEOUT => 1200,
+        CURLOPT_CONNECTTIMEOUT => $connectTimeout,
+        CURLOPT_TIMEOUT => $totalTimeout,
+        CURLOPT_LOW_SPEED_LIMIT => 1024, // 1KB/s minimum speed
+        CURLOPT_LOW_SPEED_TIME => 300,   // 5 minut przy niskiej prędkości
         CURLOPT_NOPROGRESS => false,
         CURLOPT_VERBOSE => true,
         CURLOPT_STDERR  => $vstream,
+        // Dodatkowe opcje dla stabilności
+        CURLOPT_TCP_KEEPALIVE => 1,
+        CURLOPT_TCP_KEEPIDLE => 600,
+        CURLOPT_TCP_KEEPINTVL => 60,
     ]);
     
     curl_opts_for_mode($ch);
@@ -211,10 +222,11 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
     curl_close($ch);
     fclose($fp);
 
-    // Check if upload was actually successful despite 451 error
+    // Lepsze sprawdzanie czy upload się udał
     $uploadCompleted = strpos($verbose, 'We are completely uploaded and fine') !== false;
     $bytesUploaded = $info['size_upload'] ?? 0;
-    $expectedSize = filesize($localPath);
+    $expectedSize = $fileSize;
+    $uploadSuccess = $uploadCompleted && ($bytesUploaded >= $expectedSize * 0.99); // 99% tolerancja
 
     // Enhanced logging
     debug_log('UPLOAD_RESULT', [
@@ -228,43 +240,63 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
         'file_size' => $bytesUploaded,
         'expected_size' => $expectedSize,
         'upload_completed' => $uploadCompleted,
+        'upload_success' => $uploadSuccess,
         'retry_attempt' => $retryCount
-    ], $ok ? 'INFO' : 'ERROR');
+    ], ($ok || $uploadSuccess) ? 'INFO' : 'ERROR');
 
     $resp = [];
     if(!$ok) {
-        $resp = ['ok'=>false,'error'=>"cURL error: $err"];
-        debug_error('UPLOAD_FAILED', 'Upload failed', [
-            'curl_error' => $err,
-            'verbose' => $verbose
-        ]);
-    } elseif($code >= 400) {
-        // Special handling for 451 error when upload actually completed
-        if ($code == 451 && $uploadCompleted && $bytesUploaded == $expectedSize) {
-            debug_info('UPLOAD_451_BUT_SUCCESS', 'Upload completed despite 451 error', [
+        // Jeśli cURL failed ale upload się udał, traktuj jako sukces
+        if ($uploadSuccess) {
+            debug_info('UPLOAD_CURL_FAILED_BUT_SUCCESS', 'cURL failed but upload completed', [
+                'curl_error' => $err,
                 'bytes_uploaded' => $bytesUploaded,
                 'expected_size' => $expectedSize
             ]);
-            $resp = ['ok'=>true, 'warning'=>'Upload completed despite server error 451'];
+            $resp = ['ok'=>true, 'warning'=>'Upload completed despite cURL error'];
         } else {
-            $errorMsg = "FTP response code: $code";
-            if ($code == 451) {
-                $errorMsg .= " (Transfer aborted by server)";
-                // Retry once for 451 errors
-                if ($retryCount < 1) {
-                    debug_info('UPLOAD_RETRY', 'Retrying upload after 451 error');
-                    sleep(1); // Brief pause before retry
+            $resp = ['ok'=>false,'error'=>"cURL error: $err"];
+            debug_error('UPLOAD_FAILED', 'Upload failed', [
+                'curl_error' => $err,
+                'verbose' => $verbose
+            ]);
+        }
+    } elseif($code >= 400) {
+        // Obsługa błędów 4xx/5xx
+        if ($code == 451) {
+            if ($uploadSuccess) {
+                debug_info('UPLOAD_451_BUT_SUCCESS', 'Upload completed despite 451 error', [
+                    'bytes_uploaded' => $bytesUploaded,
+                    'expected_size' => $expectedSize
+                ]);
+                $resp = ['ok'=>true, 'warning'=>'Upload completed despite server error 451'];
+            } else {
+                // Retry dla błędu 451 z eksponencjalnym backoff
+                if ($retryCount < 3) {
+                    $waitTime = pow(2, $retryCount); // 1s, 2s, 4s
+                    debug_info('UPLOAD_RETRY_451', 'Retrying upload after 451 error', [
+                        'retry_count' => $retryCount + 1,
+                        'wait_time' => $waitTime
+                    ]);
+                    sleep($waitTime);
                     return ftp_put_file($localPath, $remoteFullPath, $retryCount + 1);
                 }
+                $resp = ['ok'=>false,'error'=>"FTP response code: 451 (Transfer aborted by server) - wszystkie próby wyczerpane"];
             }
-            $resp = ['ok'=>false,'error'=>$errorMsg];
+        } else {
+            $resp = ['ok'=>false,'error'=>"FTP response code: $code"];
+        }
+        
+        if (!$resp['ok']) {
             debug_error('UPLOAD_FAILED', 'Bad FTP response', [
                 'response_code' => $code,
                 'verbose' => $verbose,
                 'upload_completed' => $uploadCompleted,
+                'upload_success' => $uploadSuccess,
                 'bytes_uploaded' => $bytesUploaded,
                 'expected_size' => $expectedSize,
-                'hint' => $code == 451 ? 'Server aborted transfer - may be server-side timeout' : null
+                'retry_count' => $retryCount,
+                'hint' => $code == 451 ? 'Server aborted transfer - możliwy timeout serwera' : null
             ]);
         }
     } else {
@@ -282,9 +314,14 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
             'curl_info' => $info,
             'verbose' => mb_substr($verbose, -DEBUG_VERBOSE_LIMIT),
             'upload_completed' => $uploadCompleted,
+            'upload_success' => $uploadSuccess,
             'bytes_uploaded' => $bytesUploaded,
             'expected_size' => $expectedSize,
             'retry_attempt' => $retryCount,
+            'timeouts' => [
+                'connect' => $connectTimeout,
+                'total' => $totalTimeout
+            ],
             'config' => [
                 'ftp_mode' => FTP_MODE,
                 'ftp_host' => FTP_HOST,
