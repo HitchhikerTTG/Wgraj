@@ -332,23 +332,52 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
             ]);
             
             if (!$integrityCheck['verified']) {
-                debug_error('INTEGRITY_FAILED', 'File integrity check failed', [
-                    'local_hash' => $localHash,
-                    'remote_hash' => $remoteHash,
-                    'local_size' => $expectedSize,
-                    'remote_size' => strlen($downloadResult['data'])
-                ]);
-                
-                // If integrity failed and we haven't exhausted retries, try again
-                if ($retryCount < 3) {
-                    debug_info('INTEGRITY_RETRY', 'Retrying upload due to integrity failure', [
-                        'retry_count' => $retryCount + 1
-                    ]);
-                    return ftp_put_file($localPath, $remoteFullPath, $retryCount + 1);
-                } else {
-                    $resp = ['ok' => false, 'error' => 'Integralność pliku nie została zachowana po 3 próbach'];
+                    $integrityError = [
+                        'local_hash' => $localHash,
+                        'remote_hash' => $remoteHash,
+                        'local_size' => $expectedSize,
+                        'remote_size' => strlen($downloadResult['data']),
+                        'file_path' => $remoteFullPath,
+                        'retry_count' => $retryCount,
+                        'timestamp' => date('c')
+                    ];
+                    
+                    debug_error('INTEGRITY_FAILED', 'File integrity check failed', $integrityError);
+                    
+                    // If integrity failed and we haven't exhausted retries, try again
+                    if ($retryCount < 3) {
+                        debug_info('INTEGRITY_RETRY', 'Retrying upload due to integrity failure', [
+                            'retry_count' => $retryCount + 1
+                        ]);
+                        return ftp_put_file($localPath, $remoteFullPath, $retryCount + 1);
+                    } else {
+                        // Send detailed error report to admin
+                        $errorReport = "BŁĄD INTEGRALNOŚCI PLIKU - Wszystkie próby wyczerpane\n\n";
+                        $errorReport .= "Plik: " . basename($localPath) . "\n";
+                        $errorReport .= "Ścieżka zdalna: " . $remoteFullPath . "\n";
+                        $errorReport .= "Próby przesłania: " . ($retryCount + 1) . "\n";
+                        $errorReport .= "Hash lokalny: " . $localHash . "\n";
+                        $errorReport .= "Hash zdalny: " . ($remoteHash ?: 'brak') . "\n";
+                        $errorReport .= "Rozmiar lokalny: " . number_format($expectedSize) . " bajtów\n";
+                        $errorReport .= "Rozmiar zdalny: " . number_format(strlen($downloadResult['data'])) . " bajtów\n";
+                        $errorReport .= "Różnica: " . number_format(abs($expectedSize - strlen($downloadResult['data']))) . " bajtów\n";
+                        $errorReport .= "Czas: " . date('Y-m-d H:i:s') . "\n\n";
+                        $errorReport .= "Sugerowane działania:\n";
+                        $errorReport .= "1. Sprawdź stabilność połączenia FTP\n";
+                        $errorReport .= "2. Sprawdź miejsce na dysku serwera FTP\n";
+                        $errorReport .= "3. Sprawdź ustawienia transferu (tryb binarny/tekstowy)\n";
+                        $errorReport .= "4. Rozważ zwiększenie timeout'ów\n";
+                        
+                        send_mail(EMAIL_TO, EMAIL_FROM, 'UPLOADER: Błąd integralności pliku', $errorReport);
+                        
+                        $resp = [
+                            'ok' => false, 
+                            'error' => 'Integralność pliku nie została zachowana po ' . ($retryCount + 1) . ' próbach',
+                            'integrity_details' => $integrityError,
+                            'can_retry' => true
+                        ];
+                    }
                 }
-            }
         } else {
             debug_error('INTEGRITY_DOWNLOAD_FAILED', 'Cannot download file for verification', [
                 'error' => $downloadResult['error']

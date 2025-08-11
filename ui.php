@@ -56,7 +56,6 @@ if ($token):
     <div class="card">
       <div class="card-body">
         <p class="text-body-secondary mb-3">
-          <strong>Katalog docelowy:</strong> <code><?=h($meta['remote_dir'])?></code><br>
           <strong>Wygasa:</strong> <?= date('Y-m-d H:i', $meta['expires']) ?>
         </p>
 
@@ -241,6 +240,15 @@ if ($token):
                   item.pbar.classList.add('bg-danger');
                   item.pbar.style.width = '100%';
                   item.pbar.textContent = res.msg || 'Błąd ponownego przesłania';
+                  
+                  // Add another retry button if integrity error and can retry
+                  if (res.can_retry && res.integrity_details) {
+                    const anotherRetryBtn = document.createElement('button');
+                    anotherRetryBtn.className = 'btn btn-sm btn-outline-warning mt-1';
+                    anotherRetryBtn.textContent = 'Spróbuj ponownie';
+                    anotherRetryBtn.onclick = () => retryUpload(item);
+                    item.row.appendChild(anotherRetryBtn);
+                  }
                 } else {
                   item.pbar.classList.remove('bg-info');
                   item.pbar.classList.add('bg-success');
@@ -307,13 +315,36 @@ if ($token):
                   item.pbar.style.width = '100%';
                   item.pbar.textContent = res.msg || 'Błąd';
                   
-                  // Add retry button
-                  const retryBtn = document.createElement('button');
-                  retryBtn.className = 'btn btn-sm btn-outline-warning mt-2';
-                  retryBtn.textContent = 'Ponów przesłanie';
-                  retryBtn.onclick = () => retryUpload(item);
-                  item.row.appendChild(retryBtn);
+                  // Add retry button and detailed error info
+                  const errorDiv = document.createElement('div');
+                  errorDiv.className = 'mt-2';
                   
+                  if (res.can_retry) {
+                    const retryBtn = document.createElement('button');
+                    retryBtn.className = 'btn btn-sm btn-outline-warning me-2';
+                    retryBtn.textContent = 'Ponów przesłanie';
+                    retryBtn.onclick = () => retryUpload(item);
+                    errorDiv.appendChild(retryBtn);
+                  }
+                  
+                  if (res.integrity_details) {
+                    const detailsBtn = document.createElement('button');
+                    detailsBtn.className = 'btn btn-sm btn-outline-info';
+                    detailsBtn.textContent = 'Szczegóły błędu';
+                    detailsBtn.onclick = () => {
+                      const details = `Błąd integralności pliku:\n\n` +
+                        `Hash lokalny: ${res.integrity_details.local_hash}\n` +
+                        `Hash zdalny: ${res.integrity_details.remote_hash || 'brak'}\n` +
+                        `Rozmiar lokalny: ${res.integrity_details.local_size.toLocaleString()} B\n` +
+                        `Rozmiar zdalny: ${res.integrity_details.remote_size.toLocaleString()} B\n` +
+                        `Próby: ${res.integrity_details.retry_count + 1}\n\n` +
+                        `Administrator został powiadomiony o błędzie.`;
+                      alert(details);
+                    };
+                    errorDiv.appendChild(detailsBtn);
+                  }
+                  
+                  item.row.appendChild(errorDiv);
                 } else {
                   item.pbar.classList.add('bg-success');
                   item.pbar.style.width = '100%';
@@ -371,6 +402,28 @@ if ($token):
           debugContent.textContent = JSON.stringify(debugInfo, null, 2);
           debugOutput.style.display = 'block';
         }
+
+        // Count successful uploads
+        const successfulUploads = queue.filter(item => 
+          item.pbar.classList.contains('bg-success')
+        ).length;
+        
+        // Show completion message
+        const completionDiv = document.createElement('div');
+        if (successfulUploads === total) {
+          completionDiv.className = 'alert alert-success mt-3';
+          completionDiv.innerHTML = `
+            <h6 class="mb-1">✓ Wszystkie pliki zostały wysłane</h6>
+            <p class="mb-0">Pomyślnie przesłano ${successfulUploads} z ${total} plików.</p>
+          `;
+        } else {
+          completionDiv.className = 'alert alert-warning mt-3';
+          completionDiv.innerHTML = `
+            <h6 class="mb-1">⚠ Upload zakończony z błędami</h6>
+            <p class="mb-0">Przesłano ${successfulUploads} z ${total} plików. Sprawdź pliki z błędami powyżej.</p>
+          `;
+        }
+        document.querySelector('.card-body').appendChild(completionDiv);
 
         // Finalize
         try {
