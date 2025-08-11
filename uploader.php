@@ -805,8 +805,16 @@ if (!$token) {
     $uri = $_SERVER['REQUEST_URI'] ?? '';
     if (strpos($uri,'?')!==false) $uri = strstr($uri,'?', true);
     $uri = trim($uri,'/');
-    if ($uri !== '' && strpos($uri,'index.php')===false) {
-        $token = basename($uri);
+    
+    // Skip common web assets that shouldn't be treated as tokens
+    $skipFiles = ['favicon.ico', 'apple-touch-icon.png', 'apple-touch-icon-precomposed.png', 'robots.txt', 'sitemap.xml'];
+    $fileName = basename($uri);
+    
+    if ($uri !== '' && strpos($uri,'index.php')===false && !in_array($fileName, $skipFiles)) {
+        // Only treat as token if it looks like a valid slug (alphanumeric with hyphens)
+        if (preg_match('/^[a-z0-9-]+$/', $fileName)) {
+            $token = $fileName;
+        }
     }
 }
 
@@ -1230,6 +1238,25 @@ if ($action==='autotest' && $_SERVER['REQUEST_METHOD']==='POST') {
 
     debug_log('AUTOTEST_RESULT', $result);
     json_response($result);
+}
+
+/** 8) Handle common web assets */
+$requestUri = $_SERVER['REQUEST_URI'] ?? '';
+$fileName = basename(parse_url($requestUri, PHP_URL_PATH));
+
+// Return 404 for common assets that don't exist
+$assetFiles = ['favicon.ico', 'apple-touch-icon.png', 'apple-touch-icon-precomposed.png', 'robots.txt'];
+if (in_array($fileName, $assetFiles)) {
+    if ($fileName === 'robots.txt') {
+        header('Content-Type: text/plain');
+        echo "User-agent: *\nDisallow: /\n";
+        exit;
+    } else {
+        http_response_code(404);
+        header('Content-Type: text/plain');
+        echo "Not found";
+        exit;
+    }
 }
 
 // Include the UI
