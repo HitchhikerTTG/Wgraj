@@ -43,8 +43,13 @@ if ($token):
     
     <?php if (DEBUG_UPLOAD): ?>
     <div class="alert alert-info">
-      <h6>Tryb debugowania włączony</h6>
-      <p class="mb-0">Dodatkowe informacje o błędach będą dostępne w przypadku problemów z uploadem.</p>
+      <h6>Tryb debugowania plików włączony</h6>
+      <p class="mb-0">Logowanie do pliku jest aktywne.</p>
+      <?php if (FRONTEND_DEBUG): ?>
+      <small class="text-muted">Debug na froncie: dostępny przez ?debug=1</small>
+      <?php else: ?>
+      <small class="text-muted">Debug na froncie: wyłączony</small>
+      <?php endif; ?>
     </div>
     <?php endif; ?>
     

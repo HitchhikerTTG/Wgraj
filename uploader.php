@@ -588,13 +588,15 @@ if (!$token) {
     }
 }
 
-// Debug mode detection
+// Debug mode detection - only enabled if FRONTEND_DEBUG is true
 $_REQ_DEBUG = false;
-if (isset($_GET['debug']) && $_GET['debug'] === '1') {
-    $_REQ_DEBUG = true;
-}
-if (isset($_GET['debug_key']) && $_GET['debug_key'] === ADMIN_KEY) {
-    $_REQ_DEBUG = true;
+if (FRONTEND_DEBUG) {
+    if (isset($_GET['debug']) && $_GET['debug'] === '1') {
+        $_REQ_DEBUG = true;
+    }
+    if (isset($_GET['debug_key']) && $_GET['debug_key'] === ADMIN_KEY) {
+        $_REQ_DEBUG = true;
+    }
 }
 $GLOBALS['_REQ_DEBUG'] = $_REQ_DEBUG;
 

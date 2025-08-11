@@ -99,6 +99,7 @@ if (!empty($_ENV['SMTP_HOST'])) {
 define('DEBUG_UPLOAD', filter_var($_ENV['DEBUG_UPLOAD'] ?? 'false', FILTER_VALIDATE_BOOLEAN));
 define('DEBUG_LOG_FILE', $_ENV['DEBUG_LOG_FILE'] ?? __DIR__ . '/data/upload.log');
 define('DEBUG_VERBOSE_LIMIT', (int)($_ENV['DEBUG_VERBOSE_LIMIT'] ?? 2000));
+define('FRONTEND_DEBUG', filter_var($_ENV['FRONTEND_DEBUG'] ?? 'false', FILTER_VALIDATE_BOOLEAN));
 
 // Data directory
 define('DATA_DIR', __DIR__ . '/data');
