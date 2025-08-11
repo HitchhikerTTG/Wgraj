@@ -156,7 +156,29 @@ function ftp_ensure_dir($remoteDir) {
 }
 
 function upload_file($localPath, $remoteFullPath, $retryCount = 0) {
-    return local_file_upload($localPath, $remoteFullPath, $retryCount);
+    debug_info('UPLOAD_METHOD_SELECTION', 'Selecting upload method', [
+        'configured_method' => UPLOAD_METHOD,
+        'local_path' => $localPath,
+        'remote_path' => $remoteFullPath,
+        'http_url_defined' => defined('HTTP_UPLOAD_URL'),
+        'http_url_value' => defined('HTTP_UPLOAD_URL') ? HTTP_UPLOAD_URL : 'undefined'
+    ]);
+    
+    switch(UPLOAD_METHOD) {
+        case 'http':
+            if (!defined('HTTP_UPLOAD_URL') || !HTTP_UPLOAD_URL) {
+                debug_error('UPLOAD_METHOD_ERROR', 'HTTP method selected but no URL configured');
+                return ['ok' => false, 'error' => 'HTTP upload URL not configured'];
+            }
+            return http_chunked_upload($localPath, $remoteFullPath, $retryCount);
+            
+        case 'ftp':
+            return ftp_put_file($localPath, $remoteFullPath, $retryCount);
+            
+        case 'local':
+        default:
+            return local_file_upload($localPath, $remoteFullPath, $retryCount);
+    }
 }
 
 function http_chunked_upload($localPath, $remoteFullPath, $retryCount = 0) {

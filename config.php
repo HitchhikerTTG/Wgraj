@@ -33,9 +33,29 @@ try {
 define('ADMIN_KEY', $_ENV['ADMIN_KEY'] ?? 'changeme');
 define('BASE_URL', $_ENV['BASE_URL'] ?? 'http://localhost');
 
-// Simplified upload - local storage only
-define('UPLOAD_METHOD', 'local');
+// Upload method configuration
+define('UPLOAD_METHOD', $_ENV['UPLOAD_METHOD'] ?? 'local');
 define('LOCAL_STORAGE_PATH', $_ENV['LOCAL_STORAGE_PATH'] ?? './uploads');
+
+// HTTP Upload configuration
+if (!empty($_ENV['HTTP_UPLOAD_URL'])) {
+    define('HTTP_UPLOAD_URL', $_ENV['HTTP_UPLOAD_URL']);
+    define('HTTP_UPLOAD_TOKEN', $_ENV['HTTP_UPLOAD_TOKEN'] ?? '');
+    define('CHUNK_SIZE', (int)($_ENV['CHUNK_SIZE'] ?? 1048576));
+}
+
+// FTP configuration (backup method)
+if (!empty($_ENV['FTP_HOST'])) {
+    define('FTP_HOST', $_ENV['FTP_HOST']);
+    define('FTP_PORT', (int)($_ENV['FTP_PORT'] ?? 21));
+    define('FTP_USER', $_ENV['FTP_USER'] ?? '');
+    define('FTP_PASS', $_ENV['FTP_PASS'] ?? '');
+    define('FTP_MODE', $_ENV['FTP_MODE'] ?? 'explicit');
+    define('FTP_ROOTDIR', $_ENV['FTP_ROOTDIR'] ?? '/');
+    define('FTP_CONNECT_TIMEOUT', (int)($_ENV['FTP_CONNECT_TIMEOUT'] ?? 30));
+    define('FTP_TOTAL_TIMEOUT', (int)($_ENV['FTP_TOTAL_TIMEOUT'] ?? 300));
+    define('FTP_LOW_SPEED_TIME', (int)($_ENV['FTP_LOW_SPEED_TIME'] ?? 60));
+}
 
 // Upload limits
 define('MAX_BYTES', (int)($_ENV['MAX_BYTES'] ?? 500 * 1024 * 1024));
