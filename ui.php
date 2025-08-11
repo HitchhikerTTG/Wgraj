@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html lang="pl" data-bs-theme="light">
 <head>
@@ -40,7 +39,7 @@ if ($token):
     </div>
   <?php else: ?>
     <h1 class="h4 mb-3">Prześlij pliki <?= $meta['label'] ? '— '.h($meta['label']) : '' ?></h1>
-    
+
     <?php if (DEBUG_UPLOAD): ?>
     <div class="alert alert-info">
       <h6>Tryb debugowania plików włączony</h6>
@@ -52,7 +51,7 @@ if ($token):
       <?php endif; ?>
     </div>
     <?php endif; ?>
-    
+
     <div class="card">
       <div class="card-body">
         <p class="text-body-secondary mb-3">
@@ -128,11 +127,11 @@ if ($token):
           </div>
         `;
         list.appendChild(row);
-        
+
         const pbar = row.querySelector('.progress-bar');
         const removeBtn = row.querySelector('.remove-btn');
         const item = {file:f, rel:rel, row:row, pbar:pbar};
-        
+
         removeBtn.addEventListener('click', () => {
           const index = queue.indexOf(item);
           if (index > -1) {
@@ -140,14 +139,14 @@ if ($token):
             row.remove();
           }
         });
-        
+
         queue.push(item);
       }
 
       pickFiles.addEventListener('change', e=>{
         for (const f of e.target.files) addRow(f, f.name);
       });
-      
+
       pickDir.addEventListener('change', e=>{
         for (const f of e.target.files){
           const rel = f.webkitRelativePath || f.name;
@@ -162,7 +161,7 @@ if ($token):
           drop.classList.add('dragover');
         });
       });
-      
+
       ['dragleave','drop'].forEach(ev=>{
         drop.addEventListener(ev, e=>{
           e.preventDefault();
@@ -170,7 +169,7 @@ if ($token):
           drop.classList.remove('dragover');
         });
       });
-      
+
       drop.addEventListener('drop', e=>{
         const items = e.dataTransfer.items;
         if (items && items.length && 'webkitGetAsEntry' in items[0]) {
@@ -183,7 +182,7 @@ if ($token):
           for (const f of files) addRow(f, f.name);
         }
       });
-      
+
       function traverseEntry(entry, path){
         if (entry.isFile) {
           entry.file(f=> addRow(f, path + entry.name));
@@ -201,59 +200,56 @@ if ($token):
         item.pbar.classList.add('bg-info');
         item.pbar.style.width = '0%';
         item.pbar.textContent = 'Ponawiam...';
-        
+
         // Remove retry button if exists
         const retryBtn = item.row.querySelector('.btn-outline-warning');
         if (retryBtn) retryBtn.remove();
-        
+
         return new Promise((resolve) => {
           const fd = new FormData();
           fd.append('file', item.file, item.file.name);
           fd.append('relpath', item.rel);
-          
+
           const xhr = new XMLHttpRequest();
           xhr.open('POST', '?action=retry<?php echo $token ? '&t='.rawurlencode($token).'&debug=1' : '';?>');
-          
+
           xhr.upload.onprogress = (e) => {
             if(e.lengthComputable){
               item.pbar.style.width = Math.round(e.loaded/e.total*100)+'%';
             }
           };
-          
+
           xhr.onreadystatechange = () => {
             if (xhr.readyState === 4) {
               try {
                 const res = JSON.parse(xhr.responseText);
-                
+
                 if (res.debug) {
                   debugInfo.push({
                     file: item.rel,
                     success: res.ok,
                     debug: res.debug,
-                    response: res,
                     retry: true
                   });
                 }
-                
+
                 if (!res.ok) {
                   item.pbar.classList.remove('bg-info');
                   item.pbar.classList.add('bg-danger');
                   item.pbar.style.width = '100%';
                   item.pbar.textContent = res.msg || 'Błąd ponownego przesłania';
-                  
-                  // Add another retry button if integrity error and can retry
-                  if (res.can_retry && res.integrity_details) {
-                    const anotherRetryBtn = document.createElement('button');
-                    anotherRetryBtn.className = 'btn btn-sm btn-outline-warning mt-1';
-                    anotherRetryBtn.textContent = 'Spróbuj ponownie';
-                    anotherRetryBtn.onclick = () => retryUpload(item);
-                    item.row.appendChild(anotherRetryBtn);
-                  }
+
+                  // Always add retry button for failed retries
+                  const anotherRetryBtn = document.createElement('button');
+                  anotherRetryBtn.className = 'btn btn-sm btn-outline-warning mt-1';
+                  anotherRetryBtn.textContent = 'Spróbuj ponownie';
+                  anotherRetryBtn.onclick = () => retryUpload(item);
+                  item.row.appendChild(anotherRetryBtn);
                 } else {
                   item.pbar.classList.remove('bg-info');
                   item.pbar.classList.add('bg-success');
                   item.pbar.style.width = '100%';
-                  
+
                   if (res.debug && res.debug.integrity_check) {
                     const integrityOk = res.debug.integrity_check.verified;
                     if (integrityOk) {
@@ -276,7 +272,7 @@ if ($token):
               resolve();
             }
           };
-          
+
           xhr.send(fd);
         });
       }
@@ -286,21 +282,21 @@ if ($token):
           const fd = new FormData();
           fd.append('file', item.file, item.file.name);
           fd.append('relpath', item.rel);
-          
+
           const xhr = new XMLHttpRequest();
           xhr.open('POST', '?action=upload<?php echo $token ? '&t='.rawurlencode($token).'&debug=1' : '';?>');
-          
+
           xhr.upload.onprogress = (e)=>{
             if(e.lengthComputable){
               item.pbar.style.width = Math.round(e.loaded/e.total*100)+'%';
             }
           };
-          
+
           xhr.onreadystatechange = ()=>{
             if (xhr.readyState===4){
               try{
                 const res = JSON.parse(xhr.responseText);
-                
+
                 if (res.debug) {
                   debugInfo.push({
                     file: item.rel,
@@ -309,16 +305,16 @@ if ($token):
                     response: res
                   });
                 }
-                
+
                 if (!res.ok) {
                   item.pbar.classList.add('bg-danger');
                   item.pbar.style.width = '100%';
                   item.pbar.textContent = res.msg || 'Błąd';
-                  
+
                   // Add retry button and detailed error info
                   const errorDiv = document.createElement('div');
                   errorDiv.className = 'mt-2';
-                  
+
                   if (res.can_retry) {
                     const retryBtn = document.createElement('button');
                     retryBtn.className = 'btn btn-sm btn-outline-warning me-2';
@@ -326,7 +322,7 @@ if ($token):
                     retryBtn.onclick = () => retryUpload(item);
                     errorDiv.appendChild(retryBtn);
                   }
-                  
+
                   if (res.integrity_details) {
                     const detailsBtn = document.createElement('button');
                     detailsBtn.className = 'btn btn-sm btn-outline-info';
@@ -343,12 +339,12 @@ if ($token):
                     };
                     errorDiv.appendChild(detailsBtn);
                   }
-                  
+
                   item.row.appendChild(errorDiv);
                 } else {
                   item.pbar.classList.add('bg-success');
                   item.pbar.style.width = '100%';
-                  
+
                   // Check integrity if debug info is available
                   if (res.debug && res.debug.integrity_check) {
                     const integrityOk = res.debug.integrity_check.verified;
@@ -371,7 +367,7 @@ if ($token):
               resolve();
             }
           };
-          
+
           xhr.send(fd);
         });
       }
@@ -381,7 +377,7 @@ if ($token):
           alert('Dodaj pliki lub folder.');
           return;
         }
-        
+
         sendBtn.disabled = true;
         sendBtn.textContent = 'Wysyłanie...';
         debugInfo = [];
@@ -407,7 +403,7 @@ if ($token):
         const successfulUploads = queue.filter(item => 
           item.pbar.classList.contains('bg-success')
         ).length;
-        
+
         // Show completion message
         const completionDiv = document.createElement('div');
         if (successfulUploads === total) {
@@ -429,7 +425,7 @@ if ($token):
         try {
           const finalizeRes = await fetch('?action=finalize<?php echo $token ? '&t='.rawurlencode($token) : '';?>',{method:'POST'});
           const finalizeData = await finalizeRes.json();
-          
+
           if (finalizeData.ok) {
             sendBtn.textContent = `Zakończono (${finalizeData.count} plików)`;
             sendBtn.classList.remove('btn-primary');
@@ -448,7 +444,7 @@ if ($token):
 <?php else: ?>
   <!-- ADMIN PANEL -->
   <h1 class="h4 mb-3">Generator jednorazowych linków do uploadu</h1>
-  
+
   <div class="card mb-4">
     <div class="card-header">
       <h5 class="mb-0">Utwórz nowy link</h5>
@@ -469,9 +465,9 @@ if ($token):
         </div>
       </form>
       <div id="out" class="mt-3"></div>
-      
+
       <hr class="my-4">
-      
+
       <div class="row text-muted small">
         <div class="col-md-6">
           <strong>Konfiguracja:</strong><br>
@@ -532,20 +528,20 @@ if ($token):
     // Link generator
     const form = document.getElementById('gen');
     const out  = document.getElementById('out');
-    
+
     form.addEventListener('submit', async (e)=>{
       e.preventDefault();
       const key   = document.getElementById('key').value.trim();
       const label = document.getElementById('label').value.trim();
-      
+
       const fd = new FormData();
       fd.append('key', key);
       fd.append('label', label);
-      
+
       try {
         const res = await fetch('?action=new', {method:'POST', body:fd});
         const json = await res.json();
-        
+
         if (json.ok){
           out.innerHTML = `
             <div class="alert alert-success">
@@ -566,18 +562,18 @@ if ($token):
     // Email test
     const etform = document.getElementById('emailtest');
     const etout  = document.getElementById('emailtestout');
-    
+
     etform.addEventListener('submit', async (e)=>{
       e.preventDefault();
       const fd = new FormData();
       fd.append('key', document.getElementById('ekey').value.trim());
-      
+
       etout.innerHTML = '<div class="alert alert-info">Testowanie wysyłania email...</div>';
-      
+
       try {
         const res = await fetch('?action=emailtest', {method:'POST', body:fd});
         const js = await res.json();
-        
+
         if (js.ok) {
           etout.innerHTML = `
             <div class="alert alert-success">
@@ -597,15 +593,15 @@ if ($token):
     // Connection test
     const atform = document.getElementById('autotest');
     const atout  = document.getElementById('atestout');
-    
+
     atform.addEventListener('submit', async (e)=>{
       e.preventDefault();
       const fd = new FormData();
       fd.append('key', document.getElementById('akey').value.trim());
       fd.append('label', document.getElementById('alabel').value.trim());
-      
+
       atout.textContent = 'Testowanie...';
-      
+
       try {
         const res = await fetch('?action=autotest', {method:'POST', body:fd});
         const js = await res.json();

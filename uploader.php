@@ -344,37 +344,45 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
                     
                     debug_error('INTEGRITY_FAILED', 'File integrity check failed', $integrityError);
                     
-                    // If integrity failed and we haven't exhausted retries, try again
+                    // If integrity failed and we haven't exhausted automatic retries, try again
                     if ($retryCount < 3) {
                         debug_info('INTEGRITY_RETRY', 'Retrying upload due to integrity failure', [
                             'retry_count' => $retryCount + 1
                         ]);
                         return ftp_put_file($localPath, $remoteFullPath, $retryCount + 1);
                     } else {
-                        // Send detailed error report to admin
-                        $errorReport = "BŁĄD INTEGRALNOŚCI PLIKU - Wszystkie próby wyczerpane\n\n";
+                        // Send detailed error report to admin after automatic retries exhausted
+                        $errorReport = "BŁĄD INTEGRALNOŚCI PLIKU - Automatyczne próby wyczerpane\n\n";
                         $errorReport .= "Plik: " . basename($localPath) . "\n";
                         $errorReport .= "Ścieżka zdalna: " . $remoteFullPath . "\n";
-                        $errorReport .= "Próby przesłania: " . ($retryCount + 1) . "\n";
+                        $errorReport .= "Automatyczne próby: " . ($retryCount + 1) . "\n";
                         $errorReport .= "Hash lokalny: " . $localHash . "\n";
                         $errorReport .= "Hash zdalny: " . ($remoteHash ?: 'brak') . "\n";
                         $errorReport .= "Rozmiar lokalny: " . number_format($expectedSize) . " bajtów\n";
                         $errorReport .= "Rozmiar zdalny: " . number_format(strlen($downloadResult['data'])) . " bajtów\n";
                         $errorReport .= "Różnica: " . number_format(abs($expectedSize - strlen($downloadResult['data']))) . " bajtów\n";
-                        $errorReport .= "Czas: " . date('Y-m-d H:i:s') . "\n\n";
-                        $errorReport .= "Sugerowane działania:\n";
-                        $errorReport .= "1. Sprawdź stabilność połączenia FTP\n";
-                        $errorReport .= "2. Sprawdź miejsce na dysku serwera FTP\n";
-                        $errorReport .= "3. Sprawdź ustawienia transferu (tryb binarny/tekstowy)\n";
-                        $errorReport .= "4. Rozważ zwiększenie timeout'ów\n";
+                        $errorReport .= "Czas: " . date('Y-m-d H:i:s') . "\n";
+                        $errorReport .= "URL do ręcznego ponowienia: " . rtrim(BASE_URL, '/') . '/' . basename(dirname($localPath)) . "?debug=1\n\n";
+                        $errorReport .= "Możliwe przyczyny:\n";
+                        $errorReport .= "1. Niestabilne połączenie FTP\n";
+                        $errorReport .= "2. Brak miejsca na dysku serwera FTP\n";
+                        $errorReport .= "3. Błędny tryb transferu (powinien być binarny)\n";
+                        $errorReport .= "4. Za krótkie timeout'y dla dużych plików\n";
+                        $errorReport .= "5. Przerwy w połączeniu sieciowym\n";
+                        $errorReport .= "6. Ograniczenia serwera FTP (limity czasu, rozmiaru)\n\n";
+                        $errorReport .= "Rozwiązania:\n";
+                        $errorReport .= "- Użytkownik może ponownie przesłać plik ręcznie\n";
+                        $errorReport .= "- Sprawdź logi FTP serwera\n";
+                        $errorReport .= "- Rozważ zwiększenie TIMEOUT w config\n";
                         
                         send_mail(EMAIL_TO, EMAIL_FROM, 'UPLOADER: Błąd integralności pliku', $errorReport);
                         
                         $resp = [
                             'ok' => false, 
-                            'error' => 'Integralność pliku nie została zachowana po ' . ($retryCount + 1) . ' próbach',
+                            'error' => 'Integralność pliku nie została zachowana - użyj przycisku "Ponów przesłanie" aby spróbować ponownie',
                             'integrity_details' => $integrityError,
-                            'can_retry' => true
+                            'can_retry' => true,
+                            'retry_unlimited' => true
                         ];
                     }
                 }
