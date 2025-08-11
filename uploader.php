@@ -127,11 +127,12 @@ function ftp_ensure_dir($remoteDir) {
     return ['ok' => $ok !== false, 'error' => $err];
 }
 
-function ftp_put_file($localPath, $remoteFullPath) {
+function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
     debug_info('UPLOAD_START', 'Starting file upload', [
         'local_path' => $localPath,
         'remote_path' => $remoteFullPath,
-        'file_size' => file_exists($localPath) ? filesize($localPath) : 'N/A'
+        'file_size' => file_exists($localPath) ? filesize($localPath) : 'N/A',
+        'retry_attempt' => $retryCount
     ]);
     
     // Ensure directory exists
@@ -182,6 +183,11 @@ function ftp_put_file($localPath, $remoteFullPath) {
     curl_close($ch);
     fclose($fp);
 
+    // Check if upload was actually successful despite 451 error
+    $uploadCompleted = strpos($verbose, 'We are completely uploaded and fine') !== false;
+    $bytesUploaded = $info['size_upload'] ?? 0;
+    $expectedSize = filesize($localPath);
+
     // Enhanced logging
     debug_log('UPLOAD_RESULT', [
         'success' => (bool)$ok,
@@ -191,7 +197,10 @@ function ftp_put_file($localPath, $remoteFullPath) {
         'http_code' => $code,
         'curl_info' => $info,
         'verbose_output' => $verbose,
-        'file_size' => $info['size_upload'] ?? 'unknown'
+        'file_size' => $bytesUploaded,
+        'expected_size' => $expectedSize,
+        'upload_completed' => $uploadCompleted,
+        'retry_attempt' => $retryCount
     ], $ok ? 'INFO' : 'ERROR');
 
     $resp = [];
@@ -202,21 +211,39 @@ function ftp_put_file($localPath, $remoteFullPath) {
             'verbose' => $verbose
         ]);
     } elseif($code >= 400) {
-        $errorMsg = "FTP response code: $code";
-        if ($code == 451) {
-            $errorMsg .= " (Brak uprawnień lub problem z katalogiem docelowym)";
+        // Special handling for 451 error when upload actually completed
+        if ($code == 451 && $uploadCompleted && $bytesUploaded == $expectedSize) {
+            debug_info('UPLOAD_451_BUT_SUCCESS', 'Upload completed despite 451 error', [
+                'bytes_uploaded' => $bytesUploaded,
+                'expected_size' => $expectedSize
+            ]);
+            $resp = ['ok'=>true, 'warning'=>'Upload completed despite server error 451'];
+        } else {
+            $errorMsg = "FTP response code: $code";
+            if ($code == 451) {
+                $errorMsg .= " (Transfer aborted by server)";
+                // Retry once for 451 errors
+                if ($retryCount < 1) {
+                    debug_info('UPLOAD_RETRY', 'Retrying upload after 451 error');
+                    sleep(1); // Brief pause before retry
+                    return ftp_put_file($localPath, $remoteFullPath, $retryCount + 1);
+                }
+            }
+            $resp = ['ok'=>false,'error'=>$errorMsg];
+            debug_error('UPLOAD_FAILED', 'Bad FTP response', [
+                'response_code' => $code,
+                'verbose' => $verbose,
+                'upload_completed' => $uploadCompleted,
+                'bytes_uploaded' => $bytesUploaded,
+                'expected_size' => $expectedSize,
+                'hint' => $code == 451 ? 'Server aborted transfer - may be server-side timeout' : null
+            ]);
         }
-        $resp = ['ok'=>false,'error'=>$errorMsg];
-        debug_error('UPLOAD_FAILED', 'Bad FTP response', [
-            'response_code' => $code,
-            'verbose' => $verbose,
-            'hint' => $code == 451 ? 'Check directory permissions or path' : null
-        ]);
     } else {
         $resp = ['ok'=>true];
         debug_info('UPLOAD_SUCCESS', 'Upload completed successfully', [
             'duration' => $duration,
-            'bytes_uploaded' => $info['size_upload'] ?? 0
+            'bytes_uploaded' => $bytesUploaded
         ]);
     }
 
@@ -226,6 +253,10 @@ function ftp_put_file($localPath, $remoteFullPath) {
             'duration' => $duration,
             'curl_info' => $info,
             'verbose' => mb_substr($verbose, -DEBUG_VERBOSE_LIMIT),
+            'upload_completed' => $uploadCompleted,
+            'bytes_uploaded' => $bytesUploaded,
+            'expected_size' => $expectedSize,
+            'retry_attempt' => $retryCount,
             'config' => [
                 'ftp_mode' => FTP_MODE,
                 'ftp_host' => FTP_HOST,
