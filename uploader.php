@@ -536,6 +536,12 @@ if ($action==='upload' && $_SERVER['REQUEST_METHOD']==='POST') {
         $response = ['ok'=>true,'msg'=>'OK'];
         if (isset($up['debug'])) {
             $response['debug'] = $up['debug'];
+            // Add file URL in debug mode
+            if ($_REQ_DEBUG) {
+                $fileUrl = build_url($dst);
+                $response['debug']['file_url'] = $fileUrl;
+                $response['debug']['file_path'] = $dst;
+            }
         }
         json_response($response);
     } else {
