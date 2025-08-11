@@ -130,7 +130,7 @@ if ($token):
 
         const pbar = row.querySelector('.progress-bar');
         const removeBtn = row.querySelector('.remove-btn');
-        const item = {file:f, rel:rel, row:row, pbar:pbar};
+        const item = {file:f, rel:rel, row:row, pbar:pbar, status: row.querySelector('.file-rel')}; // Add status element
 
         removeBtn.addEventListener('click', () => {
           const index = queue.indexOf(item);
@@ -204,6 +204,9 @@ if ($token):
         // Remove retry button if exists
         const retryBtn = item.row.querySelector('.btn-outline-warning');
         if (retryBtn) retryBtn.remove();
+        const retryContainer = item.row.querySelector('.mt-2');
+        if (retryContainer) retryContainer.remove();
+
 
         return new Promise((resolve) => {
           const fd = new FormData();
@@ -309,23 +312,26 @@ if ($token):
                 if (!res.ok) {
                   item.pbar.classList.add('bg-danger');
                   item.pbar.style.width = '100%';
-                  item.pbar.textContent = res.msg || 'Błąd';
+                  item.status.textContent = 'BŁĄD: ' + (res.msg || 'nieznany błąd'); // Use status element for error message
+                  item.status.className = 'text-danger fw-bold'; // Make error message bold and red
 
-                  // Add retry button and detailed error info
-                  const errorDiv = document.createElement('div');
-                  errorDiv.className = 'mt-2';
-
-                  if (res.can_retry) {
+                  // Add retry button for failed uploads or integrity issues
+                  if (res.can_retry || res.retry_unlimited || (res.msg && (res.msg.includes('Integralność') || res.msg.includes('ponownie')))) {
                     const retryBtn = document.createElement('button');
-                    retryBtn.className = 'btn btn-sm btn-outline-warning me-2';
+                    retryBtn.className = 'btn btn-sm btn-warning mt-2';
                     retryBtn.textContent = 'Ponów przesłanie';
                     retryBtn.onclick = () => retryUpload(item);
-                    errorDiv.appendChild(retryBtn);
+
+                    const retryContainer = document.createElement('div');
+                    retryContainer.className = 'mt-2';
+                    retryContainer.appendChild(retryBtn);
+                    item.row.appendChild(retryContainer);
                   }
 
+                  // Add detailed error info for integrity issues
                   if (res.integrity_details) {
                     const detailsBtn = document.createElement('button');
-                    detailsBtn.className = 'btn btn-sm btn-outline-info';
+                    detailsBtn.className = 'btn btn-sm btn-outline-info ms-2';
                     detailsBtn.textContent = 'Szczegóły błędu';
                     detailsBtn.onclick = () => {
                       const details = `Błąd integralności pliku:\n\n` +
@@ -337,10 +343,8 @@ if ($token):
                         `Administrator został powiadomiony o błędzie.`;
                       alert(details);
                     };
-                    errorDiv.appendChild(detailsBtn);
+                    item.row.querySelector('.mt-2').appendChild(detailsBtn);
                   }
-
-                  item.row.appendChild(errorDiv);
                 } else {
                   item.pbar.classList.add('bg-success');
                   item.pbar.style.width = '100%';
@@ -350,19 +354,26 @@ if ($token):
                     const integrityOk = res.debug.integrity_check.verified;
                     if (integrityOk) {
                       item.pbar.textContent = 'OK ✓';
+                      item.status.textContent = 'OK ✓'; // Update status text
+                      item.status.className = 'text-success fw-bold'; // Make status text green and bold
                     } else {
                       item.pbar.classList.remove('bg-success');
                       item.pbar.classList.add('bg-warning');
                       item.pbar.textContent = 'OK (błąd integralności)';
+                      item.status.textContent = 'OK (błąd integralności)'; // Update status text
+                      item.status.className = 'text-warning fw-bold'; // Make status text orange and bold
                     }
                   } else {
                     item.pbar.textContent = 'OK';
+                    item.status.textContent = 'OK'; // Update status text
+                    item.status.className = 'text-success fw-bold'; // Make status text green and bold
                   }
                 }
               } catch(e){
                 item.pbar.classList.add('bg-danger');
                 item.pbar.style.width = '100%';
-                item.pbar.textContent = 'Błąd parsowania';
+                item.status.textContent = 'BŁĄD parsowania'; // Use status element for error message
+                item.status.className = 'text-danger fw-bold'; // Make error message bold and red
               }
               resolve();
             }
@@ -400,7 +411,7 @@ if ($token):
         }
 
         // Count successful uploads
-        const successfulUploads = queue.filter(item => 
+        const successfulUploads = queue.filter(item =>
           item.pbar.classList.contains('bg-success')
         ).length;
 

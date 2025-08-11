@@ -101,6 +101,11 @@ define('DEBUG_LOG_FILE', $_ENV['DEBUG_LOG_FILE'] ?? __DIR__ . '/data/upload.log'
 define('DEBUG_VERBOSE_LIMIT', (int)($_ENV['DEBUG_VERBOSE_LIMIT'] ?? 2000));
 define('FRONTEND_DEBUG', filter_var($_ENV['FRONTEND_DEBUG'] ?? 'false', FILTER_VALIDATE_BOOLEAN));
 
+// Connection timeouts (in seconds)
+define('FTP_CONNECT_TIMEOUT', (int)($_ENV['FTP_CONNECT_TIMEOUT'] ?? 120));
+define('FTP_TOTAL_TIMEOUT', (int)($_ENV['FTP_TOTAL_TIMEOUT'] ?? 3600));
+define('FTP_LOW_SPEED_TIME', (int)($_ENV['FTP_LOW_SPEED_TIME'] ?? 600));
+
 // Data directory
 define('DATA_DIR', __DIR__ . '/data');
 if (!is_dir(DATA_DIR)) {

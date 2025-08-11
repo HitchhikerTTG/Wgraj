@@ -188,9 +188,9 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
     $url = build_url($remoteFullPath);
     $fileSize = filesize($localPath);
     
-    // Zwiększone timeouty dla większych plików
-    $connectTimeout = 60;
-    $totalTimeout = max(1800, $fileSize / 1024); // minimum 30 min lub 1KB/s
+    // Konfigurowalne timeouty z możliwością dostosowania przez .env
+    $connectTimeout = FTP_CONNECT_TIMEOUT;
+    $totalTimeout = max(FTP_TOTAL_TIMEOUT, $fileSize / 512); // minimum config lub 0.5KB/s
     
     curl_setopt_array($ch, [
         CURLOPT_URL => $url,
@@ -201,15 +201,15 @@ function ftp_put_file($localPath, $remoteFullPath, $retryCount = 0) {
         CURLOPT_FTP_CREATE_MISSING_DIRS => CURLFTP_CREATE_DIR,
         CURLOPT_CONNECTTIMEOUT => $connectTimeout,
         CURLOPT_TIMEOUT => $totalTimeout,
-        CURLOPT_LOW_SPEED_LIMIT => 1024, // 1KB/s minimum speed
-        CURLOPT_LOW_SPEED_TIME => 300,   // 5 minut przy niskiej prędkości
+        CURLOPT_LOW_SPEED_LIMIT => 512,  // 0.5KB/s minimum speed (bardziej tolerancyjne)
+        CURLOPT_LOW_SPEED_TIME => FTP_LOW_SPEED_TIME,   // konfigurowalne z .env
         CURLOPT_NOPROGRESS => false,
         CURLOPT_VERBOSE => true,
         CURLOPT_STDERR  => $vstream,
         // Dodatkowe opcje dla stabilności
         CURLOPT_TCP_KEEPALIVE => 1,
-        CURLOPT_TCP_KEEPIDLE => 600,
-        CURLOPT_TCP_KEEPINTVL => 60,
+        CURLOPT_TCP_KEEPIDLE => 1200, // 20 minut idle
+        CURLOPT_TCP_KEEPINTVL => 120, // co 2 minuty keepalive
     ]);
     
     curl_opts_for_mode($ch);
