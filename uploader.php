@@ -842,8 +842,9 @@ debug_info('REQUEST', 'Processing request', [
 if ($action==='new' && $_SERVER['REQUEST_METHOD']==='POST') {
     $key   = $_POST['key'] ?? '';
     $label = $_POST['label'] ?? '';
+    $reusable = isset($_POST['reusable']) && $_POST['reusable'] === '1';
     
-    debug_info('ADMIN_NEW', 'Creating new link', ['label' => $label]);
+    debug_info('ADMIN_NEW', 'Creating new link', ['label' => $label, 'reusable' => $reusable]);
     
     if ($key !== ADMIN_KEY) {
         debug_error('ADMIN_NEW', 'Unauthorized access attempt');
@@ -870,8 +871,10 @@ if ($action==='new' && $_SERVER['REQUEST_METHOD']==='POST') {
         'created'    => now(),
         'expires'    => now() + 3600*TOKEN_TTL_H,
         'used'       => false,
+        'reusable'   => $reusable,
         'remote_dir' => $remoteDir,
-        'files'      => []
+        'files'      => [],
+        'uploads'    => []  // Track multiple upload sessions
     ];
     
     file_put_contents(tok_path($slug), json_encode($meta, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
@@ -906,7 +909,7 @@ if ($action==='upload' && $_SERVER['REQUEST_METHOD']==='POST') {
         json_response(['ok'=>false,'error'=>'Błąd metadanych'],500);
     }
     
-    if (!empty($meta['used'])) {
+    if (!empty($meta['used']) && !$meta['reusable']) {
         debug_error('UPLOAD', 'Link already used', ['token' => $token]);
         json_response(['ok'=>false,'error'=>'Link został już użyty'],410);
     }
@@ -1002,15 +1005,39 @@ if ($action==='finalize' && $_SERVER['REQUEST_METHOD']==='POST') {
         'file_count' => count($meta['files'] ?? [])
     ]);
 
-    $meta['used'] = true;
-    $meta['used_at'] = now();
+    // For non-reusable links, mark as used
+    if (!$meta['reusable']) {
+        $meta['used'] = true;
+        $meta['used_at'] = now();
+    }
+    
+    // Add upload session to history
+    $sessionId = uniqid('session_', true);
+    $uploadSession = [
+        'session_id' => $sessionId,
+        'timestamp' => now(),
+        'files' => $meta['files'] ?? [],
+        'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown'
+    ];
+    
+    $meta['uploads'][] = $uploadSession;
+    
+    // Clear current files for next upload (if reusable)
+    if ($meta['reusable']) {
+        $meta['files'] = [];
+    }
+    
     file_put_contents($path, json_encode($meta, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
 
-    $files = $meta['files'] ?? [];
-    $body  = "Zakończono wysyłkę.\n".
+    $files = $uploadSession['files'];
+    $totalUploads = count($meta['uploads']);
+    $reusableText = $meta['reusable'] ? " (link wielokrotnego użytku - sesja #{$totalUploads})" : "";
+    
+    $body  = "Zakończono wysyłkę{$reusableText}.\n".
              "Etykieta: ".($meta['label'] ?? $meta['token'])."\n".
              "Zdalny katalog: ".$meta['remote_dir']."\n".
-             "Plików: ".count($files)."\n\n";
+             "Plików w tej sesji: ".count($files)."\n".
+             "Łączna liczba sesji: {$totalUploads}\n\n";
     
     foreach($files as $f){
         $body .= ' - '.$f['rel'].' ('.number_format($f['size']/1024/1024,2).' MB)'."\n";
@@ -1018,8 +1045,8 @@ if ($action==='finalize' && $_SERVER['REQUEST_METHOD']==='POST') {
     
     send_mail(EMAIL_TO, EMAIL_FROM, 'Uploader: zakończono wysyłkę', $body);
 
-    debug_info('FINALIZE_SUCCESS', 'Upload finalized', ['file_count' => count($files)]);
-    json_response(['ok'=>true,'count'=>count($files)]);
+    debug_info('FINALIZE_SUCCESS', 'Upload finalized', ['file_count' => count($files), 'session_count' => $totalUploads]);
+    json_response(['ok'=>true,'count'=>count($files),'session'=>$totalUploads,'reusable'=>$meta['reusable']]);
 }
 
 /** 4) Manual retry upload */
@@ -1240,7 +1267,60 @@ if ($action==='autotest' && $_SERVER['REQUEST_METHOD']==='POST') {
     json_response($result);
 }
 
-/** 8) Handle common web assets */
+/** 8) View uploaded files */
+if ($action==='view' && $_SERVER['REQUEST_METHOD']==='GET') {
+    if (!$token) {
+        json_response(['ok'=>false,'error'=>'Brak etykiety'],400);
+    }
+    
+    $path = tok_path($token);
+    if (!is_file($path)) {
+        json_response(['ok'=>false,'error'=>'Link nie istnieje'],404);
+    }
+    
+    $meta = json_decode(file_get_contents($path), true);
+    if (!$meta) {
+        json_response(['ok'=>false,'error'=>'Błąd metadanych'],500);
+    }
+    
+    debug_info('VIEW_FILES', 'Viewing uploaded files', [
+        'token' => $token,
+        'upload_sessions' => count($meta['uploads'] ?? [])
+    ]);
+    
+    // Prepare file list with session info
+    $response = [
+        'ok' => true,
+        'label' => $meta['label'] ?? $token,
+        'created' => $meta['created'],
+        'expires' => $meta['expires'],
+        'reusable' => $meta['reusable'] ?? false,
+        'remote_dir' => $meta['remote_dir'],
+        'upload_sessions' => []
+    ];
+    
+    foreach ($meta['uploads'] ?? [] as $session) {
+        $sessionData = [
+            'session_id' => $session['session_id'],
+            'timestamp' => $session['timestamp'],
+            'date' => date('Y-m-d H:i:s', $session['timestamp']),
+            'ip' => $session['ip'] ?? 'unknown',
+            'file_count' => count($session['files']),
+            'total_size' => array_sum(array_column($session['files'], 'size')),
+            'files' => $session['files']
+        ];
+        $response['upload_sessions'][] = $sessionData;
+    }
+    
+    // Also include current files if any
+    if (!empty($meta['files'])) {
+        $response['current_files'] = $meta['files'];
+    }
+    
+    json_response($response);
+}
+
+/** 9) Handle common web assets */
 $requestUri = $_SERVER['REQUEST_URI'] ?? '';
 $fileName = basename(parse_url($requestUri, PHP_URL_PATH));
 

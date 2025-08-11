@@ -83,14 +83,90 @@ if ($token):
             <pre id="debugContent" class="small bg-light p-2 rounded"></pre>
           </div>
         </div>
-
-        <p class="text-body-secondary mt-3 mb-0">
-          <strong>Dozwolone rozszerzenia:</strong> <?=implode(', ', ALLOW_EXT)?><br>
-          <strong>Maksymalny rozmiar pliku:</strong> <?=number_format(MAX_BYTES/1024/1024)?> MB<br>
-          <strong>Ważność linku:</strong> <?=TOKEN_TTL_H?> godzin
-        </p>
       </div>
     </div>
+
+    <?php if ($meta['reusable'] || !empty($meta['uploads'])): ?>
+    <div class="card mt-4">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h6 class="mb-0">Przesłane pliki</h6>
+        <button class="btn btn-sm btn-outline-primary" onclick="loadUploadedFiles()">
+          Odśwież listę
+        </button>
+      </div>
+      <div class="card-body">
+        <div id="uploadedFiles">
+          <div class="text-center text-muted py-3">
+            <div class="spinner-border spinner-border-sm" role="status"></div>
+            <span class="ms-2">Ładowanie...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+    async function loadUploadedFiles() {
+      const container = document.getElementById('uploadedFiles');
+      container.innerHTML = '<div class="text-center text-muted py-3"><div class="spinner-border spinner-border-sm"></div><span class="ms-2">Ładowanie...</span></div>';
+
+      try {
+        const response = await fetch('?action=view&t=<?= rawurlencode($token) ?>');
+        const data = await response.json();
+
+        if (!data.ok) {
+          container.innerHTML = '<div class="alert alert-danger">Błąd: ' + data.error + '</div>';
+          return;
+        }
+
+        let html = '';
+
+        if (data.reusable) {
+          html += '<div class="alert alert-info"><i class="bi bi-arrow-repeat"></i> Link wielokrotnego użytku</div>';
+        }
+
+        if (data.upload_sessions.length === 0) {
+          html += '<div class="text-muted text-center py-3">Nie przesłano jeszcze żadnych plików</div>';
+        } else {
+          html += '<h6>Sesje uploadu (' + data.upload_sessions.length + '):</h6>';
+
+          data.upload_sessions.reverse().forEach((session, index) => {
+            const totalSizeMB = (session.total_size / 1024 / 1024).toFixed(2);
+
+            html += '<div class="border rounded p-3 mb-3">';
+            html += '<div class="d-flex justify-content-between align-items-start mb-2">';
+            html += '<h6 class="mb-0">Sesja #' + (data.upload_sessions.length - index) + '</h6>';
+            html += '<small class="text-muted">' + session.date + '</small>';
+            html += '</div>';
+            html += '<p class="mb-2 small text-muted">IP: ' + session.ip + ' • Plików: ' + session.file_count + ' • Rozmiar: ' + totalSizeMB + ' MB</p>';
+
+            if (session.files.length > 0) {
+              html += '<div class="table-responsive">';
+              html += '<table class="table table-sm table-borderless mb-0">';
+              session.files.forEach(file => {
+                const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
+                html += '<tr>';
+                html += '<td class="file-rel">' + file.rel + '</td>';
+                html += '<td class="text-end text-muted small">' + fileSizeMB + ' MB</td>';
+                html += '</tr>';
+              });
+              html += '</table>';
+              html += '</div>';
+            }
+            html += '</div>';
+          });
+        }
+
+        container.innerHTML = html;
+
+      } catch (error) {
+        container.innerHTML = '<div class="alert alert-danger">Błąd połączenia: ' + error.message + '</div>';
+      }
+    }
+
+    // Load files on page load
+    document.addEventListener('DOMContentLoaded', loadUploadedFiles);
+    </script>
+    <?php endif; ?>
 
     <script>
       const drop     = document.getElementById('drop');
@@ -462,16 +538,22 @@ if ($token):
     </div>
     <div class="card-body">
       <form id="gen" class="row g-3">
-        <div class="col-12 col-md-4">
+        <div class="col-12 col-md-3">
           <label class="form-label">Klucz admina</label>
           <input type="password" id="key" class="form-control" required>
         </div>
-        <div class="col-12 col-md-6">
+        <div class="col-12 col-md-4">
           <label class="form-label">Etykieta (będzie częścią URL)</label>
           <input type="text" id="label" class="form-control" placeholder="np. raport-asia-2024" required>
           <div class="form-text">Litery, cyfry, myślniki. Maksymalnie 64 znaki.</div>
         </div>
-        <div class="col-12 col-md-2 d-grid align-self-end">
+        <div class="col-12 col-md-2">
+          <label class="form-label">Wielokrotnego użytku</label>
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="reusable" role="switch">
+          </div>
+        </div>
+        <div class="col-12 col-md-3 d-grid align-self-end">
           <button type="submit" class="btn btn-primary">Utwórz link</button>
         </div>
       </form>
@@ -548,6 +630,7 @@ if ($token):
       const fd = new FormData();
       fd.append('key', key);
       fd.append('label', label);
+      fd.append('reusable', document.getElementById('reusable').checked ? '1' : '0');
 
       try {
         const res = await fetch('?action=new', {method:'POST', body:fd});
